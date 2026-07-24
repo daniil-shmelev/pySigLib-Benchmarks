@@ -4,19 +4,20 @@
 using ChenSignatures
 using StaticArrays
 using JSON
+using Statistics
 
 # -------- Path Generators --------
 
 """Generate linear path of static vectors: [t, 2t, 2t, ...]"""
 function make_path_linear_svector(d::Int, N::Int)
     ts = range(0.0, stop=1.0, length=N)
-    [SVector{d,Float64}(ntuple(i -> (i == 1 ? t : 2t), d)) for t in ts]
+    [SVector{d,Float32}(ntuple(i -> Float32(i == 1 ? t : 2t), d)) for t in ts]
 end
 
 """Generate linear path as dense matrix (N x d)"""
 function make_path_linear_matrix(d::Int, N::Int)
     ts = range(0.0, stop=1.0, length=N)
-    path = Array{Float64}(undef, N, d)
+    path = Array{Float32}(undef, N, d)
     path[:, 1] .= ts
     if d > 1
         @views path[:, 2:end] .= 2.0 .* ts
@@ -28,14 +29,14 @@ end
 function make_path_sin_svector(d::Int, N::Int)
     ts = range(0.0, stop=1.0, length=N)
     omega = 2.0 * pi
-    [SVector{d,Float64}(ntuple(i -> sin(omega * i * t), d)) for t in ts]
+    [SVector{d,Float32}(ntuple(i -> Float32(sin(omega * i * t)), d)) for t in ts]
 end
 
 """Generate sinusoidal path as dense matrix: [sin(2pi*1*t), sin(2pi*2*t), ...]"""
 function make_path_sin_matrix(d::Int, N::Int)
     ts = range(0.0, stop=1.0, length=N)
     omega = 2.0 * pi
-    path = Array{Float64}(undef, N, d)
+    path = Array{Float32}(undef, N, d)
     for j in 1:d
         @views path[:, j] .= sin.(omega * j .* ts)
     end
@@ -85,30 +86,25 @@ function manual_timing_loop(func::Function, repeats::Int; warmup_iterations::Int
 
     # Timed phase with GC disabled and allocation tracking
     GC.enable(false)
-    local t0, t1, total_alloc_bytes
+    local total_alloc_bytes
+    samples_ms = Float64[]
     try
-        t0 = time_ns()
-
-        # Track allocations for all iterations
-        total_alloc_bytes = @allocated begin
-            for _ in 1:repeats
+        total_alloc_bytes = 0
+        for _ in 1:repeats
+            t0 = time_ns()
+            total_alloc_bytes += @allocated begin
                 func()
             end
+            push!(samples_ms, (time_ns() - t0) / 1e6)
         end
-
-        t1 = time_ns()
     finally
         GC.enable(true)
     end
 
-    # Calculate average time in milliseconds
-    total_time_ns = t1 - t0
-    avg_time_ms = (total_time_ns / repeats) / 1e6
-
     # Calculate average bytes allocated per iteration
     avg_alloc_bytes = div(total_alloc_bytes, repeats)
 
-    return avg_time_ms, avg_alloc_bytes
+    return median(samples_ms), avg_alloc_bytes, samples_ms
 end
 
 # -------- Benchmark Operations --------
@@ -120,7 +116,7 @@ Returns a closure that performs only the kernel (no setup).
 """
 function run_signature(path, m::Int)
     # Setup phase (untimed): path is already prepared
-    tensor_type = ChenSignatures.Tensor{Float64}
+    tensor_type = ChenSignatures.Tensor{Float32}
 
     # Return kernel closure
     return () -> signature_path(tensor_type, path, m)
@@ -133,7 +129,7 @@ Returns a closure that performs only the kernel (no setup).
 """
 function run_logsignature(path, m::Int)
     # Setup phase (untimed): path is already prepared
-    tensor_type = ChenSignatures.Tensor{Float64}
+    tensor_type = ChenSignatures.Tensor{Float32}
 
     # Return kernel closure
     return () -> ChenSignatures.log(signature_path(tensor_type, path, m))
@@ -154,7 +150,19 @@ end
 # -------- Main Benchmark Runner --------
 
 """Format benchmark result for JSON output"""
-function output_result(N, d, m, path_kind, operation, t_ms, alloc_bytes, library, method, path_type)
+function output_result(
+    N,
+    d,
+    m,
+    path_kind,
+    operation,
+    t_ms,
+    alloc_bytes,
+    samples_ms,
+    library,
+    method,
+    path_type,
+)
     return Dict(
         "N" => N,
         "d" => d,
@@ -166,6 +174,9 @@ function output_result(N, d, m, path_kind, operation, t_ms, alloc_bytes, library
         "method" => method,
         "path_type" => path_type,
         "t_ms" => t_ms,
+        "t_ms_mean" => mean(samples_ms),
+        "t_ms_std" => std(samples_ms; corrected=false),
+        "samples_ms" => samples_ms,
         "alloc_bytes" => alloc_bytes
     )
 end
@@ -181,8 +192,8 @@ function run_benchmark(config::Dict)
     repeats = config["repeats"]
 
     path_variants = [
-        ("Vector{SVector}", make_path_svector(d, N, path_kind)),
-        ("Matrix{Float64}", make_path_matrix(d, N, path_kind))
+        ("Vector{SVector{Float32}}", make_path_svector(d, N, path_kind)),
+        ("Matrix{Float32}", make_path_matrix(d, N, path_kind))
     ]
 
     for (path_label, path_data) in path_variants
@@ -190,11 +201,11 @@ function run_benchmark(config::Dict)
         kernel, method = prepare_kernel(path_data, operation, m)
 
         # Run manual timing loop
-        t_ms, alloc_bytes = manual_timing_loop(kernel, repeats)
+        t_ms, alloc_bytes, samples_ms = manual_timing_loop(kernel, repeats)
 
         # Format result
         result = output_result(
-            N, d, m, path_kind, operation, t_ms, alloc_bytes,
+            N, d, m, path_kind, operation, t_ms, alloc_bytes, samples_ms,
             "ChenSignatures.jl",
             method,
             path_label

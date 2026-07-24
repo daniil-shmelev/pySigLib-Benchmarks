@@ -40,7 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import numpy as np
-from common import BenchmarkAdapter, make_path
+from common import BenchmarkAdapter
 
 
 class ChenSignaturesAdapter(BenchmarkAdapter):
@@ -59,7 +59,7 @@ class ChenSignaturesAdapter(BenchmarkAdapter):
         Returns a closure that performs only the kernel (no setup).
         """
         # Setup phase (untimed): ensure path is contiguous
-        path = np.ascontiguousarray(path, dtype=np.float64)
+        path = np.ascontiguousarray(path, dtype=np.float32)
 
         # Return kernel closure
         return lambda: self.chen.sig(path, m)
@@ -75,7 +75,7 @@ class ChenSignaturesAdapter(BenchmarkAdapter):
             return None
 
         # Setup phase (untimed): prepare basis and ensure path is contiguous
-        path = np.ascontiguousarray(path, dtype=np.float64)
+        path = np.ascontiguousarray(path, dtype=np.float32)
         basis = self.chen.prepare_logsig(d, m)
 
         # Return kernel closure
@@ -95,11 +95,11 @@ class ChenSignaturesAdapter(BenchmarkAdapter):
             return None
 
         # Setup phase (untimed): prepare path as numpy array
-        path_np = np.ascontiguousarray(make_path(d, self.N, self.path_kind), dtype=np.float64)
+        path_np = np.ascontiguousarray(path, dtype=np.float32)
 
         # Return kernel closure that converts to torch, computes sig, and backprop
         def kernel():
-            path_t = torch.tensor(path_np, dtype=torch.float64, requires_grad=True)
+            path_t = torch.tensor(path_np, dtype=torch.float32, requires_grad=True)
             sig = sig_torch(path_t, m)
             loss = sig.sum()
             loss.backward()
@@ -108,8 +108,13 @@ class ChenSignaturesAdapter(BenchmarkAdapter):
 
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
+        if self.batch_size > 1:
+            # The installed Python wrapper only exposes single-path ChenSignatures.
+            # Avoid benchmarking a Python loop as a stand-in for native batching.
+            return None
+
         # Generate path
-        path = make_path(self.d, self.N, self.path_kind)
+        path = self.make_path_input()
 
         # Select operation
         if self.operation == "signature":
@@ -132,12 +137,13 @@ class ChenSignaturesAdapter(BenchmarkAdapter):
             return None
 
         # Run manual timing loop
-        t_ms, alloc_bytes = self.manual_timing_loop(kernel)
+        t_ms, alloc_bytes, samples_ms = self.manual_timing_loop(kernel)
 
         # Format and return result
         return self.output_result(
             t_ms=t_ms,
             alloc_bytes=alloc_bytes,
+            samples_ms=samples_ms,
             library="chen-signatures",
             method=method,
             path_type=path_type,

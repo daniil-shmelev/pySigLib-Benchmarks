@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import numpy as np
-from common import BenchmarkAdapter, make_path
+from common import BenchmarkAdapter
 
 
 class StochastaxAdapter(BenchmarkAdapter):
@@ -52,9 +52,9 @@ class StochastaxAdapter(BenchmarkAdapter):
 
     def _zero_cov_increments(self, path):
         """Create zero quadratic-variation increments for ordinary branched signatures."""
-        steps = max(int(path.shape[0]) - 1, 0)
-        dim = int(path.shape[1])
-        return self.jnp.zeros((steps, dim, dim), dtype=path.dtype)
+        steps = max(int(path.shape[-2]) - 1, 0)
+        dim = int(path.shape[-1])
+        return self.jnp.zeros((*path.shape[:-2], steps, dim, dim), dtype=path.dtype)
 
     def run_signature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
@@ -65,10 +65,13 @@ class StochastaxAdapter(BenchmarkAdapter):
         path_jax = self._path_array(path)
         hopf = self.ShuffleHopfAlgebra.build(d, m)
 
-        def signature_fn(path_arg):
+        def signature_one(path_arg):
             return self.compute_path_signature(path_arg, m, hopf, mode="full").flatten()
 
-        signature_fn = self.jax.jit(signature_fn)
+        if path_jax.ndim == 3:
+            signature_fn = self.jax.jit(self.jax.vmap(signature_one))
+        else:
+            signature_fn = self.jax.jit(signature_one)
 
         return lambda: signature_fn(path_jax).block_until_ready()
 
@@ -82,7 +85,7 @@ class StochastaxAdapter(BenchmarkAdapter):
         hopf = self.ShuffleHopfAlgebra.build(d, m)
         log_signature_type = self.log_signature_type
 
-        def logsignature_fn(path_arg):
+        def logsignature_one(path_arg):
             return self.compute_log_signature(
                 path_arg,
                 m,
@@ -91,7 +94,10 @@ class StochastaxAdapter(BenchmarkAdapter):
                 mode="full",
             ).flatten()
 
-        logsignature_fn = self.jax.jit(logsignature_fn)
+        if path_jax.ndim == 3:
+            logsignature_fn = self.jax.jit(self.jax.vmap(logsignature_one))
+        else:
+            logsignature_fn = self.jax.jit(logsignature_one)
 
         return lambda: logsignature_fn(path_jax).block_until_ready()
 
@@ -104,8 +110,15 @@ class StochastaxAdapter(BenchmarkAdapter):
         path_jax = self._path_array(path)
         hopf = self.ShuffleHopfAlgebra.build(d, m)
 
-        def loss_fn(path_arg):
+        def signature_one(path_arg):
             sig = self.compute_path_signature(path_arg, m, hopf, mode="full").flatten()
+            return sig
+
+        def loss_fn(path_arg):
+            if path_arg.ndim == 3:
+                sig = self.jax.vmap(signature_one)(path_arg)
+            else:
+                sig = signature_one(path_arg)
             return self.jnp.sum(sig)
 
         grad_fn = self.jax.jit(self.jax.grad(loss_fn))
@@ -131,7 +144,7 @@ class StochastaxAdapter(BenchmarkAdapter):
         if planar:
             hopf = self.MKWHopfAlgebra.build(d, m)
 
-            def branchedsignature_fn(path_arg, cov_arg):
+            def branchedsignature_one(path_arg, cov_arg):
                 return self.compute_planar_branched_signature(
                     path_arg,
                     m,
@@ -143,7 +156,7 @@ class StochastaxAdapter(BenchmarkAdapter):
         else:
             hopf = self.GLHopfAlgebra.build(d, m)
 
-            def branchedsignature_fn(path_arg, cov_arg):
+            def branchedsignature_one(path_arg, cov_arg):
                 return self.compute_nonplanar_branched_signature(
                     path_arg,
                     m,
@@ -152,14 +165,18 @@ class StochastaxAdapter(BenchmarkAdapter):
                     cov_arg,
                 ).flatten()
 
-        branchedsignature_fn = self.jax.jit(branchedsignature_fn)
+        if path_jax.ndim == 3:
+            branchedsignature_fn = self.jax.jit(self.jax.vmap(branchedsignature_one))
+        else:
+            branchedsignature_fn = self.jax.jit(branchedsignature_one)
 
         return lambda: branchedsignature_fn(path_jax, cov_increments).block_until_ready()
 
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
-        # Generate path
-        path = make_path(self.d, self.N, self.path_kind)
+        # Generate path input during setup. Stochastax single-path APIs are
+        # vmapped by the adapter when batch_size > 1.
+        path = self.make_path_input()
 
         # Select operation
         if self.operation == "signature":
@@ -185,12 +202,13 @@ class StochastaxAdapter(BenchmarkAdapter):
             return None
 
         # Run manual timing loop
-        t_ms, alloc_bytes = self.manual_timing_loop(kernel)
+        t_ms, alloc_bytes, samples_ms = self.manual_timing_loop(kernel)
 
         # Format and return result
         return self.output_result(
             t_ms=t_ms,
             alloc_bytes=alloc_bytes,
+            samples_ms=samples_ms,
             library="stochastax",
             method=method,
             path_type="jax.Array",

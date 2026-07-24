@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import numpy as np
-from common import BenchmarkAdapter, make_path
+from common import BenchmarkAdapter
 
 
 class KerasSigAdapter(BenchmarkAdapter):
@@ -36,7 +36,13 @@ class KerasSigAdapter(BenchmarkAdapter):
 
     def _path_array(self, path: np.ndarray):
         """Convert path data to a batched contiguous JAX array during setup."""
-        path_np = np.ascontiguousarray(path[None, :, :], dtype=np.float32)
+        if path.ndim == 2:
+            path = path[None, :, :]
+        elif path.ndim != 3:
+            raise ValueError(
+                f"path must have shape (N, d) or (batch_size, N, d), got {path.shape}"
+            )
+        path_np = np.ascontiguousarray(path, dtype=np.float32)
         return self.jnp.asarray(path_np, dtype=self.jnp.float32)
 
     def run_signature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
@@ -46,10 +52,13 @@ class KerasSigAdapter(BenchmarkAdapter):
         Returns a closure that performs only the kernel (no setup).
         """
         path_jax = self._path_array(path)
+        squeeze_output = self.batch_size == 1
 
         def signature_fn(path_arg):
             sig = self.jax_gpu_signature(path_arg, depth=m, stream=False)
-            return self.jnp.squeeze(sig, axis=0)
+            if squeeze_output:
+                return self.jnp.squeeze(sig, axis=0)
+            return sig
 
         signature_fn = self.jax.jit(signature_fn)
 
@@ -73,8 +82,8 @@ class KerasSigAdapter(BenchmarkAdapter):
 
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
-        # Generate path
-        path = make_path(self.d, self.N, self.path_kind)
+        # Generate path input during setup. keras_sig's JAX API is batch-first.
+        path = self.make_path_input()
 
         # Select operation
         if self.operation == "signature":
@@ -91,12 +100,13 @@ class KerasSigAdapter(BenchmarkAdapter):
             return None
 
         # Run manual timing loop
-        t_ms, alloc_bytes = self.manual_timing_loop(kernel)
+        t_ms, alloc_bytes, samples_ms = self.manual_timing_loop(kernel)
 
         # Format and return result
         return self.output_result(
             t_ms=t_ms,
             alloc_bytes=alloc_bytes,
+            samples_ms=samples_ms,
             library="keras_sig",
             method=method,
             path_type="jax.Array",

@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import numpy as np
-from common import BenchmarkAdapter, make_path
+from common import BenchmarkAdapter
 
 
 class SignaxAdapter(BenchmarkAdapter):
@@ -104,8 +104,9 @@ class SignaxAdapter(BenchmarkAdapter):
 
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
-        # Generate path
-        path = make_path(self.d, self.N, self.path_kind)
+        # Generate path input during setup. signax dispatches rank-3 paths to
+        # its batched vmap path internally.
+        path = self.make_path_input()
 
         # Select operation
         if self.operation == "signature":
@@ -125,12 +126,13 @@ class SignaxAdapter(BenchmarkAdapter):
             return None
 
         # Run manual timing loop
-        t_ms, alloc_bytes = self.manual_timing_loop(kernel)
+        t_ms, alloc_bytes, samples_ms = self.manual_timing_loop(kernel)
 
         # Format and return result
         return self.output_result(
             t_ms=t_ms,
             alloc_bytes=alloc_bytes,
+            samples_ms=samples_ms,
             library="signax",
             method=method,
             path_type="jax.Array",

@@ -2,10 +2,15 @@
 
 import gc
 import json
+import statistics
 import sys
 import time
 import tracemalloc
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+import numpy as np
+
+from .paths import make_path, make_path_batch
 
 
 class BenchmarkAdapter:
@@ -31,8 +36,10 @@ class BenchmarkAdapter:
                 - m: Signature truncation level
                 - path_kind: "linear", "sin", or "fbm"
                 - operation: "signature", "logsignature", "sigdiff",
-                  "branchedsignature_nonplanar", or "branchedsignature_planar"
+                  "branchedsignature_nonplanar", "branchedsignature_planar",
+                  or "signaturekernel"
                 - repeats: Number of timing repetitions
+                - batch_size: Number of paths per timed kernel call
                 - backend: Optional backend label, e.g. "cpu" or "gpu"
         """
         self.config = config
@@ -42,13 +49,30 @@ class BenchmarkAdapter:
         self.path_kind = config["path_kind"]
         self.operation = config["operation"]
         self.repeats = config["repeats"]
+        if self.repeats < 1:
+            raise ValueError(f"repeats must be >= 1, got {self.repeats}")
+        self.batch_size = int(config.get("batch_size", 1))
+        if self.batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {self.batch_size}")
         self.backend = config.get("backend", "")
+        self.seed = int(config.get("seed", 0))
+        self._input_index = 0
+
+    def make_path_input(self):
+        """Generate this benchmark's input path, batched when requested."""
+        # fbm uses NumPy's legacy global RNG internally. Reset it for each
+        # logical input so every library/backend receives the same path data.
+        np.random.seed(self.seed + self._input_index)
+        self._input_index += 1
+        if self.batch_size == 1:
+            return make_path(self.d, self.N, self.path_kind)
+        return make_path_batch(self.d, self.N, self.path_kind, self.batch_size)
 
     def manual_timing_loop(
         self,
         func: Callable[[], Any],
         warmup_iterations: int = 3
-    ) -> Tuple[float, int]:
+    ) -> Tuple[float, int, List[float]]:
         """
         Execute manual timing loop with warmup and GC disabled.
 
@@ -57,9 +81,10 @@ class BenchmarkAdapter:
             warmup_iterations: Number of warmup runs before timing
 
         Returns:
-            Tuple of (avg_time_ms, alloc_bytes):
-                - avg_time_ms: Average time per iteration in milliseconds
+            Tuple of (median_time_ms, alloc_bytes, samples_ms):
+                - median_time_ms: Median time per iteration in milliseconds
                 - alloc_bytes: Average bytes allocated per iteration
+                - samples_ms: Raw time for every measured iteration
         """
         # Warmup phase (untimed)
         for _ in range(warmup_iterations):
@@ -69,27 +94,26 @@ class BenchmarkAdapter:
         gc.disable()
         tracemalloc.start()
         try:
-            t0 = time.perf_counter()
             mem0_current, mem0_peak = tracemalloc.get_traced_memory()
 
+            samples_ms = []
             for _ in range(self.repeats):
+                t0 = time.perf_counter()
                 func()
+                samples_ms.append((time.perf_counter() - t0) * 1000.0)
 
             mem1_current, mem1_peak = tracemalloc.get_traced_memory()
-            t1 = time.perf_counter()
         finally:
             tracemalloc.stop()
             gc.enable()
 
-        # Calculate average time in milliseconds
-        total_time_sec = t1 - t0
-        avg_time_ms = (total_time_sec / self.repeats) * 1000.0
+        median_time_ms = statistics.median(samples_ms)
 
         # Calculate average bytes allocated per iteration
         total_alloc_bytes = mem1_current - mem0_current
         avg_alloc_bytes = total_alloc_bytes // self.repeats if self.repeats > 0 else 0
 
-        return avg_time_ms, avg_alloc_bytes
+        return median_time_ms, avg_alloc_bytes, samples_ms
 
     def run_signature(self, path, d: int, m: int) -> Optional[Callable]:
         """
@@ -168,6 +192,25 @@ class BenchmarkAdapter:
         """
         return None  # Default: not supported
 
+    def run_signaturekernel(self, path1, path2, d: int, m: int) -> Optional[Callable]:
+        """
+        Prepare and return kernel for signature-kernel matrix computation.
+
+        This method should be overridden by subclasses to return a callable
+        that performs only the kernel computation (no setup).
+
+        Args:
+            path1: The first input path batch (format depends on library)
+            path2: The second input path batch (format depends on library)
+            d: Dimension
+            m: Signature-kernel approximation parameter for this benchmark
+
+        Returns:
+            Callable that computes the signature-kernel matrix, or None
+            if not supported
+        """
+        return None  # Default: not supported
+
     def run(self) -> None:
         """
         Execute the benchmark and output results as JSON to stdout.
@@ -203,6 +246,7 @@ class BenchmarkAdapter:
         self,
         t_ms: float,
         alloc_bytes: int,
+        samples_ms: List[float],
         library: str,
         method: str,
         path_type: str = "ndarray",
@@ -214,6 +258,7 @@ class BenchmarkAdapter:
         Args:
             t_ms: Time in milliseconds
             alloc_bytes: Bytes allocated
+            samples_ms: Raw timing samples in milliseconds
             library: Library name
             method: Method name
             path_type: Path type descriptor
@@ -226,6 +271,8 @@ class BenchmarkAdapter:
             "N": self.N,
             "d": self.d,
             "m": self.m,
+            "batch_size": self.batch_size,
+            "seed": self.seed,
             "path_kind": self.path_kind,
             "operation": self.operation,
             "backend": self.backend,
@@ -234,5 +281,8 @@ class BenchmarkAdapter:
             "method": method,
             "path_type": path_type,
             "t_ms": t_ms,
+            "t_ms_mean": statistics.fmean(samples_ms),
+            "t_ms_std": statistics.pstdev(samples_ms),
+            "samples_ms": samples_ms,
             "alloc_bytes": alloc_bytes,
         }

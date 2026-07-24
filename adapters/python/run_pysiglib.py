@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import numpy as np
-from common import BenchmarkAdapter, make_path
+from common import BenchmarkAdapter
 
 
 class PySigLibAdapter(BenchmarkAdapter):
@@ -61,7 +61,17 @@ class PySigLibAdapter(BenchmarkAdapter):
         # log signature data when the selected method requires it.
         path = self._path_array(path)
         if self.log_sig_method in (1, 2):
-            self.pysiglib.prepare_log_sig(d, m, method=self.log_sig_method)
+            device = (
+                "cuda" if self.backend == "gpu"
+                else "cpu" if self.backend == "cpu"
+                else "both"
+            )
+            self.pysiglib.prepare_log_sig(
+                d,
+                m,
+                method=self.log_sig_method,
+                device=device,
+            )
         log_sig_method = self.log_sig_method
         use_scalar_term = log_sig_method in (1, 2)
 
@@ -121,10 +131,42 @@ class PySigLibAdapter(BenchmarkAdapter):
 
         return lambda: branchedsignature_fn(path).block_until_ready()
 
+    def run_signaturekernel(
+        self,
+        path1: np.ndarray,
+        path2: np.ndarray,
+        d: int,
+        m: int,
+    ) -> Optional[Callable]:
+        """
+        Prepare signature-kernel Gram matrix computation.
+
+        Returns a closure that performs only the kernel computation (no setup).
+        """
+        path1 = self._path_array(path1)
+        path2 = self._path_array(path2)
+        dyadic_order = int(self.config.get("sig_kernel_dyadic_order", m))
+        max_batch = int(self.config.get("sig_kernel_max_batch", -1))
+
+        def signaturekernel_fn(path1_arg, path2_arg):
+            return self.pysiglib.sig_kernel_gram(
+                path1_arg,
+                path2_arg,
+                dyadic_order=dyadic_order,
+                static_kernel=None,
+                time_aug=False,
+                max_batch=max_batch,
+            )
+
+        signaturekernel_fn = self.jax.jit(signaturekernel_fn)
+
+        return lambda: signaturekernel_fn(path1, path2).block_until_ready()
+
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
-        # Generate path
-        path = make_path(self.d, self.N, self.path_kind)
+        # Generate path input during setup. pySigLib accepts leading batch
+        # dimensions, so batch_size > 1 uses native batched execution.
+        path = self.make_path_input()
 
         # Select operation
         if self.operation == "signature":
@@ -142,6 +184,13 @@ class PySigLibAdapter(BenchmarkAdapter):
         elif self.operation == "branchedsignature_planar":
             kernel = self.run_branchedsignature(path, self.d, self.m, planar=True)
             method = "branched_sig(planar=True)"
+        elif self.operation in ("signaturekernel", "signature_kernel", "sigkernel"):
+            path2 = self.make_path_input()
+            kernel = self.run_signaturekernel(path, path2, self.d, self.m)
+            method = (
+                "sig_kernel_gram"
+                f"(dyadic_order={int(self.config.get('sig_kernel_dyadic_order', self.m))})"
+            )
         else:
             # Operation not supported
             return None
@@ -150,12 +199,13 @@ class PySigLibAdapter(BenchmarkAdapter):
             return None
 
         # Run manual timing loop
-        t_ms, alloc_bytes = self.manual_timing_loop(kernel)
+        t_ms, alloc_bytes, samples_ms = self.manual_timing_loop(kernel)
 
         # Format and return result
         return self.output_result(
             t_ms=t_ms,
             alloc_bytes=alloc_bytes,
+            samples_ms=samples_ms,
             library="pysiglib",
             method=method,
             path_type="jax.Array",

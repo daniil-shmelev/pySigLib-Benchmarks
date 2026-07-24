@@ -10,7 +10,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from common.paths import make_path_linear, make_path_sin, make_path
+from common.adapter import BenchmarkAdapter
+from common.paths import make_path_batch, make_path_linear, make_path_sin, make_path
 
 
 class TestPathGeneration:
@@ -27,24 +28,24 @@ class TestPathGeneration:
         N, d = 50, 4
         path = make_path_linear(d, N)
         # First column should be linearly spaced from 0 to 1
-        expected_first_col = np.linspace(0.0, 1.0, N)
-        np.testing.assert_allclose(path[:, 0], expected_first_col, rtol=1e-10)
+        expected_first_col = np.linspace(0.0, 1.0, N, dtype=np.float32)
+        np.testing.assert_array_equal(path[:, 0], expected_first_col)
 
     def test_linear_path_other_dimensions(self):
         """Test that other dimensions are 2*t"""
         N, d = 50, 4
         path = make_path_linear(d, N)
-        ts = np.linspace(0.0, 1.0, N)
+        ts = np.linspace(0.0, 1.0, N, dtype=np.float32)
         for i in range(1, d):
-            np.testing.assert_allclose(path[:, i], 2.0 * ts, rtol=1e-10)
+            np.testing.assert_array_equal(path[:, i], 2.0 * ts)
 
     def test_linear_path_1d(self):
         """Test linear path with d=1"""
         N, d = 30, 1
         path = make_path_linear(d, N)
         assert path.shape == (N, 1)
-        expected = np.linspace(0.0, 1.0, N)[:, None]
-        np.testing.assert_allclose(path, expected, rtol=1e-10)
+        expected = np.linspace(0.0, 1.0, N, dtype=np.float32)[:, None]
+        np.testing.assert_array_equal(path, expected)
 
     def test_sin_path_shape(self):
         """Test that sinusoidal path has correct shape"""
@@ -61,11 +62,11 @@ class TestPathGeneration:
 
         # First dimension: sin(2π * 1 * t)
         expected_col0 = np.sin(omega * 1 * ts)
-        np.testing.assert_allclose(path[:, 0], expected_col0, rtol=1e-10)
+        np.testing.assert_allclose(path[:, 0], expected_col0, rtol=1e-6, atol=1e-6)
 
         # Second dimension: sin(2π * 2 * t)
         expected_col1 = np.sin(omega * 2 * ts)
-        np.testing.assert_allclose(path[:, 1], expected_col1, rtol=1e-10)
+        np.testing.assert_allclose(path[:, 1], expected_col1, rtol=1e-6, atol=1e-6)
 
     def test_sin_path_bounds(self):
         """Test that sinusoidal path values are within [-1, 1]"""
@@ -102,12 +103,30 @@ class TestPathGeneration:
         with pytest.raises(ValueError, match="Unknown path_kind"):
             make_path(2, 10, "invalid")
 
+    def test_make_path_batch_shape(self):
+        """Test that batched paths have a leading batch dimension."""
+        batch_size, N, d = 4, 20, 3
+        paths = make_path_batch(d, N, "linear", batch_size)
+        assert paths.shape == (batch_size, N, d)
+
+    def test_make_path_batch_repeats_deterministic_paths(self):
+        """Test that deterministic path batches repeat the base path."""
+        batch = make_path_batch(2, 10, "sin", 3)
+        expected = make_path(2, 10, "sin")
+        for path in batch:
+            np.testing.assert_array_equal(path, expected)
+
+    def test_make_path_batch_invalid_size(self):
+        """Test that batch_size must be positive."""
+        with pytest.raises(ValueError, match="batch_size must be >= 1"):
+            make_path_batch(2, 10, "linear", 0)
+
     def test_path_dtype(self):
-        """Test that paths are float type"""
+        """All shared inputs use the benchmark's canonical float32 precision."""
         path_linear = make_path_linear(3, 50)
         path_sin = make_path_sin(3, 50)
-        assert np.issubdtype(path_linear.dtype, np.floating)
-        assert np.issubdtype(path_sin.dtype, np.floating)
+        assert path_linear.dtype == np.float32
+        assert path_sin.dtype == np.float32
 
     def test_path_contiguous(self):
         """Test that paths are C-contiguous arrays"""
@@ -115,3 +134,43 @@ class TestPathGeneration:
         path_sin = make_path_sin(3, 50)
         assert path_linear.flags['C_CONTIGUOUS']
         assert path_sin.flags['C_CONTIGUOUS']
+
+    def test_seeded_fbm_inputs_match_across_adapters(self):
+        """Logical inputs are reproducible but X and Y remain distinct."""
+        config = {
+            "N": 16,
+            "d": 2,
+            "m": 2,
+            "path_kind": "fbm",
+            "operation": "signature",
+            "repeats": 2,
+            "batch_size": 2,
+            "seed": 1234,
+        }
+        first = BenchmarkAdapter(config)
+        second = BenchmarkAdapter(config)
+
+        first_x = first.make_path_input()
+        first_y = first.make_path_input()
+        second_x = second.make_path_input()
+        second_y = second.make_path_input()
+
+        np.testing.assert_array_equal(first_x, second_x)
+        np.testing.assert_array_equal(first_y, second_y)
+        assert not np.array_equal(first_x, first_y)
+
+    def test_timing_loop_retains_raw_samples(self):
+        adapter = BenchmarkAdapter({
+            "N": 4,
+            "d": 2,
+            "m": 2,
+            "path_kind": "linear",
+            "operation": "signature",
+            "repeats": 3,
+        })
+
+        median_ms, alloc_bytes, samples_ms = adapter.manual_timing_loop(lambda: None)
+
+        assert len(samples_ms) == 3
+        assert median_ms == np.median(samples_ms)
+        assert alloc_bytes >= 0
