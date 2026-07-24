@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.ticker import MaxNLocator
 
+SeriesKey = Tuple[str, str, str, str, int]
+
 
 def load_results(csv_path: Path) -> List[Dict[str, Any]]:
     """
@@ -29,6 +31,8 @@ def load_results(csv_path: Path) -> List[Dict[str, Any]]:
                 "N": int(row["N"]),
                 "d": int(row["d"]),
                 "m": int(row["m"]),
+                "batch_size": int(row.get("batch_size") or 1),
+                "seed": int(row.get("seed") or 0),
                 "path_kind": row["path_kind"].strip(),
                 "operation": row["operation"].strip(),
                 "backend": row.get("backend", "").strip(),
@@ -41,9 +45,45 @@ def load_results(csv_path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+def _series_key(row: Dict[str, Any]) -> SeriesKey:
+    """Identify a measured implementation without collapsing its variants."""
+    return (
+        row["library"],
+        row.get("backend", ""),
+        row.get("method", ""),
+        row.get("path_type", ""),
+        row.get("batch_size", 1),
+    )
+
+
+def _series_label(key: SeriesKey) -> str:
+    """Return a compact, unambiguous plot label for an implementation variant."""
+    library, backend, method, path_type, batch_size = key
+    label = library
+    if backend:
+        label += f" [{backend}]"
+    details = [value for value in (method, path_type) if value]
+    details.append(f"batch={batch_size}")
+    return f"{label} ({', '.join(details)})"
+
+
+def _ordered_operations(rows: List[Dict[str, Any]]) -> List[str]:
+    """Use a stable conventional order while retaining every observed operation."""
+    observed = {row["operation"] for row in rows}
+    preferred = [
+        "signature",
+        "logsignature",
+        "sigdiff",
+        "branchedsignature_nonplanar",
+        "branchedsignature_planar",
+        "signaturekernel",
+    ]
+    return [op for op in preferred if op in observed] + sorted(observed - set(preferred))
+
+
 def get_time(
     rows: List[Dict[str, Any]],
-    library: str,
+    series_key: SeriesKey,
     N: int,
     d: int,
     m: int,
@@ -55,7 +95,7 @@ def get_time(
 
     Args:
         rows: List of result dictionaries
-        library: Library name
+        series_key: Full implementation identity
         N: Number of points
         d: Dimension
         m: Signature level
@@ -72,7 +112,7 @@ def get_time(
             and r["m"] == m
             and r["path_kind"] == path_kind
             and r["operation"] == operation
-            and r["library"] == library
+            and _series_key(r) == series_key
         ):
             return r["t_ms"]
     return None
@@ -97,6 +137,217 @@ def get_latest_run(runs_dir: Path = Path("runs")) -> Optional[Path]:
 
     # Sort by directory name (which includes timestamp)
     return sorted(run_dirs)[-1]
+
+
+def _format_heatmap_param_axis(
+    params: List[Tuple[int, int]],
+) -> Tuple[List[str], str, str, bool]:
+    """
+    Format heatmap row labels, omitting dimensions fixed across the panel.
+
+    Returns labels, y-axis label, title suffix, and whether row ticks are needed.
+    """
+    Ns = sorted({n for n, _ in params})
+    Ds = sorted({d for _, d in params})
+    show_N = len(Ns) > 1
+    show_d = len(Ds) > 1
+
+    labels = []
+    for n, d in params:
+        if show_N and show_d:
+            labels.append(f"N={n}, d={d}")
+        elif show_N:
+            labels.append(str(n))
+        elif show_d:
+            labels.append(str(d))
+        else:
+            labels.append("")
+
+    fixed_parts = []
+    if not show_N and Ns:
+        fixed_parts.append(f"N={Ns[0]}")
+    if not show_d and Ds:
+        fixed_parts.append(f"d={Ds[0]}")
+
+    if show_N and show_d:
+        ylabel = "Parameters"
+    elif show_N:
+        ylabel = "N"
+    elif show_d:
+        ylabel = "d"
+    else:
+        ylabel = ""
+
+    return labels, ylabel, ", ".join(fixed_parts), show_N or show_d
+
+
+def _format_heatmap_library_axis(libraries: List[str]) -> Tuple[str, bool]:
+    """Return a title suffix and whether x-axis library ticks are needed."""
+    if len(libraries) == 1:
+        return f"library={libraries[0]}", False
+    return "", True
+
+
+def _safe_filename_part(value: object) -> str:
+    """Make a compact filesystem-safe filename component."""
+    safe = "".join(
+        char if char.isalnum() or char in ("-", "_") else "_"
+        for char in str(value).strip()
+    )
+    while "__" in safe:
+        safe = safe.replace("__", "_")
+    return safe.strip("_") or "none"
+
+
+def _configure_heatmap_axes(
+    ax: Any,
+    panel: Dict[str, Any],
+    show_titles: bool,
+) -> None:
+    """Apply shared heatmap axis labels and optional title."""
+    libraries = panel["libraries"]
+    params = panel["params"]
+
+    if panel["show_library_axis"]:
+        ax.set_xticks(np.arange(len(libraries)))
+        ax.set_xticklabels(libraries, rotation=45, ha="right")
+        ax.set_xlabel("Library")
+    else:
+        ax.set_xticks([])
+        ax.set_xlabel("")
+
+    if panel["show_param_axis"]:
+        ax.set_yticks(np.arange(len(params)))
+        ax.set_yticklabels(panel["param_labels"], fontsize=8)
+        ax.set_ylabel(panel["param_ylabel"])
+    else:
+        ax.set_yticks([])
+        ax.set_ylabel("")
+
+    if show_titles:
+        ax.set_title(f"{', '.join(panel['title_parts'])} - Runtime (ms)")
+
+
+def _annotate_heatmap(
+    ax: Any,
+    matrix: np.ndarray,
+    threshold: float,
+    fontsize: int = 7,
+) -> None:
+    """Add runtime text labels to heatmap cells."""
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            if not np.isnan(matrix[i, j]):
+                color = "black" if matrix[i, j] > threshold else "white"
+                ax.text(
+                    j,
+                    i,
+                    f"{matrix[i, j]:.2g}",
+                    ha="center",
+                    va="center",
+                    color=color,
+                    fontsize=fontsize,
+                )
+
+
+def _heatmap_color_scale(values: List[float]) -> Tuple[float, float, List[float]]:
+    """Choose shared color limits and ticks that include readable lower values."""
+    if not values:
+        return 0.0, 1.0, []
+
+    data_min = min(values)
+    data_max = max(values)
+    if data_min == data_max:
+        padding = abs(data_min) * 0.05 or 1.0
+        vmin = data_min - padding
+        vmax = data_max + padding
+        if data_min >= 0.0:
+            vmin = max(0.0, vmin)
+        return vmin, vmax, []
+
+    ticks = np.asarray(
+        MaxNLocator(nbins=8).tick_values(data_min, data_max),
+        dtype=float,
+    )
+    ticks = ticks[np.isfinite(ticks)]
+    if ticks.size < 2:
+        return data_min, data_max, []
+
+    vmin = float(ticks[0])
+    vmax = float(ticks[-1])
+    if data_min >= 0.0:
+        vmin = max(0.0, vmin)
+        if vmin == 0.0 and data_min < 1.0:
+            lower_decimal_tick = np.floor(data_min * 10.0) / 10.0
+            if lower_decimal_tick > 0.0:
+                vmin = float(lower_decimal_tick)
+    ticks = ticks[(ticks >= vmin) & (ticks <= vmax)]
+    if ticks.size and ticks[0] > vmin:
+        ticks = np.insert(ticks, 0, vmin)
+    return vmin, vmax, [float(tick) for tick in ticks]
+
+
+def _individual_heatmap_figsize(panels: List[Dict[str, Any]]) -> Tuple[float, float]:
+    """Pick a uniform, compact size for standalone heatmap panels."""
+    if not panels:
+        return 2.25, 2.4
+
+    max_rows = max(panel["matrix"].shape[0] for panel in panels)
+    max_cols = max(panel["matrix"].shape[1] for panel in panels)
+
+    width = min(max(2.25, 1.75 + 0.25 * max_cols), 2.6)
+    height = min(max(2.4, 0.13 * max_rows + 0.7), 4.2)
+    return round(width, 2), round(height, 2)
+
+
+def _save_individual_heatmap(
+    panel: Dict[str, Any],
+    output_path: Path,
+    vmin: float,
+    vmax: float,
+    colorbar_ticks: List[float],
+    annotation_threshold: float,
+    include_colorbar: bool,
+    figsize: Tuple[float, float],
+) -> None:
+    """Save a single heatmap panel using the shared color scale."""
+    fig = plt.figure(figsize=figsize, constrained_layout=False)
+    grid = fig.add_gridspec(
+        1,
+        2,
+        width_ratios=[1.0, 0.08],
+        left=0.23,
+        right=0.76,
+        bottom=0.08,
+        top=0.98,
+        wspace=0.16,
+    )
+    ax = fig.add_subplot(grid[0, 0])
+    cax = fig.add_subplot(grid[0, 1])
+
+    im = ax.imshow(
+        panel["matrix"],
+        aspect="auto",
+        cmap="viridis",
+        interpolation="nearest",
+        vmin=vmin,
+        vmax=vmax,
+    )
+    _configure_heatmap_axes(ax, panel, show_titles=False)
+    ax.tick_params(axis="both", labelsize=7, length=3)
+    ax.xaxis.label.set_size(8)
+    ax.yaxis.label.set_size(8)
+    if include_colorbar:
+        cbar = fig.colorbar(im, cax=cax, ticks=colorbar_ticks or None)
+        cbar.set_label("Runtime (ms)")
+        cbar.ax.tick_params(labelsize=7, length=3)
+        cbar.ax.yaxis.label.set_size(8)
+    else:
+        cax.set_visible(False)
+    _annotate_heatmap(ax, panel["matrix"], annotation_threshold, fontsize=6)
+    fig.savefig(output_path, dpi=300)
+    fig.savefig(output_path.with_suffix(".pdf"))
+    plt.close(fig)
 
 
 def make_line_plot(
@@ -126,13 +377,11 @@ def make_line_plot(
         Ds = sorted(config.get("Ds", []))
         Ms = sorted(config.get("Ms", []))
         path_kind = config.get("path_kind", "sin")
-        operations_cfg = config.get("operations", ["signature", "logsignature"])
     else:
         Ns = sorted(set(r["N"] for r in rows))
         Ds = sorted(set(r["d"] for r in rows))
         Ms = sorted(set(r["m"] for r in rows))
         path_kind = rows[0]["path_kind"]
-        operations_cfg = sorted(set(r["operation"] for r in rows))
 
     # Fixed parameters for each subplot (use max for worst-case scaling)
     N_fixed_for_d = max(Ns)
@@ -142,23 +391,22 @@ def make_line_plot(
     m_fixed_for_N = max(Ms)
     m_fixed_for_d = max(Ms)
 
-    # Libraries present in data
-    libraries = sorted(set(r["library"] for r in rows))
+    # Keep backend/method/path/batch variants distinct.
+    series_keys = sorted(set(_series_key(r) for r in rows))
+    op_order = _ordered_operations(rows)
 
-    # Operation order for columns
-    op_order = ["signature", "logsignature", "sigdiff"]
-
-    # Create 3x3 grid: rows = vary N/d/m, columns = operations
-    fig, axes = plt.subplots(3, 3, figsize=(15, 12), sharey="col")
+    # Rows vary N/d/m; columns are all operations present in the data.
+    fig, axes = plt.subplots(
+        3,
+        len(op_order),
+        figsize=(5 * len(op_order), 12),
+        sharey="col",
+        squeeze=False,
+    )
 
     for row_idx, vary in enumerate(["N", "d", "m"]):
         for col_idx, op in enumerate(op_order):
             ax = axes[row_idx, col_idx]
-
-            # Hide subplot if operation not in config
-            if op not in operations_cfg:
-                ax.set_visible(False)
-                continue
 
             # Determine x-axis values and fixed parameters
             if vary == "N":
@@ -180,7 +428,7 @@ def make_line_plot(
             plotted_any = False
 
             # Plot each library
-            for lib in libraries:
+            for series_key in series_keys:
                 ys = []
                 xs_effective = []
 
@@ -192,14 +440,19 @@ def make_line_plot(
                     else:  # vary m
                         N, d, m = N_fixed_for_m, d_fix, x
 
-                    t = get_time(rows, lib, N, d, m, path_kind, op)
+                    t = get_time(rows, series_key, N, d, m, path_kind, op)
                     if t is not None and t > 0.0:
                         xs_effective.append(x)
                         ys.append(t)
 
                 # Only plot if we have at least 2 points
                 if len(xs_effective) >= 2:
-                    ax.plot(xs_effective, ys, marker="o", label=lib)
+                    ax.plot(
+                        xs_effective,
+                        ys,
+                        marker="o",
+                        label=_series_label(series_key),
+                    )
                     plotted_any = True
 
             # Hide subplot if no data plotted
@@ -248,7 +501,8 @@ def make_line_plot(
 def make_heatmap_plot(
     csv_path: Path,
     output_path: Optional[Path] = None,
-    config: Optional[Dict[str, Any]] = None
+    config: Optional[Dict[str, Any]] = None,
+    show_titles: bool = True,
 ) -> Path:
     """
     Generate heatmap showing performance across all parameter combinations.
@@ -257,6 +511,7 @@ def make_heatmap_plot(
         csv_path: Path to results CSV
         output_path: Optional output path (defaults to same dir as CSV)
         config: Optional configuration dict
+        show_titles: Whether to show titles on combined and individual heatmaps
 
     Returns:
         Path to saved plot
@@ -267,9 +522,79 @@ def make_heatmap_plot(
         raise ValueError("No benchmark results found in CSV")
 
     # Get unique values
-    operations = sorted(set(r["operation"] for r in rows))
+    operations = _ordered_operations(rows)
     depths = sorted(set(r["m"] for r in rows))
     backends = sorted(set(r.get("backend", "") for r in rows))
+    panels: List[Dict[str, Any]] = []
+    global_finite_values: List[float] = []
+
+    for depth_idx, m in enumerate(depths):
+        for backend_idx, backend in enumerate(backends):
+            axis_row = depth_idx * len(backends) + backend_idx
+
+            for op_idx, operation in enumerate(operations):
+                op_rows = [
+                    r
+                    for r in rows
+                    if (
+                        r["operation"] == operation
+                        and r["m"] == m
+                        and r.get("backend", "") == backend
+                    )
+                ]
+                if not op_rows:
+                    continue
+
+                series_keys = sorted(set(_series_key(r) for r in op_rows))
+                libraries = [_series_label(key) for key in series_keys]
+                params = sorted(set((r["N"], r["d"]) for r in op_rows))
+                param_labels, param_ylabel, fixed_params_title, show_param_axis = (
+                    _format_heatmap_param_axis(params)
+                )
+                library_title, show_library_axis = _format_heatmap_library_axis(libraries)
+
+                matrix = np.full((len(params), len(libraries)), np.nan)
+                result_by_key = {}
+                for r in op_rows:
+                    result_by_key.setdefault(
+                        (r["N"], r["d"], _series_key(r)),
+                        r["t_ms"],
+                    )
+                for row_idx, (N, d) in enumerate(params):
+                    for col_idx, series_key in enumerate(series_keys):
+                        t_ms = result_by_key.get((N, d, series_key))
+                        if t_ms is not None:
+                            matrix[row_idx, col_idx] = t_ms
+
+                finite_values = matrix[np.isfinite(matrix)]
+                global_finite_values.extend(float(v) for v in finite_values)
+
+                title_parts = [f"{operation}", f"m={m}"]
+                if backend:
+                    title_parts.append(f"backend={backend}")
+                if fixed_params_title:
+                    title_parts.append(fixed_params_title)
+                if library_title:
+                    title_parts.append(library_title)
+
+                panels.append({
+                    "axis_row": axis_row,
+                    "op_idx": op_idx,
+                    "operation": operation,
+                    "m": m,
+                    "backend": backend,
+                    "libraries": libraries,
+                    "params": params,
+                    "param_labels": param_labels,
+                    "param_ylabel": param_ylabel,
+                    "show_param_axis": show_param_axis,
+                    "show_library_axis": show_library_axis,
+                    "title_parts": title_parts,
+                    "matrix": matrix,
+                })
+
+    vmin, vmax, colorbar_ticks = _heatmap_color_scale(global_finite_values)
+    annotation_threshold = (vmin + vmax) / 2
 
     # Create a heatmap for each operation/depth/backend tuple. Splitting by
     # backend keeps CPU and GPU comparisons in separate panels.
@@ -281,98 +606,72 @@ def make_heatmap_plot(
         num_ops,
         figsize=(7 * num_ops, 4.5 * num_depths * num_backends),
         squeeze=False,
+        constrained_layout=True,
     )
 
-    for depth_idx, m in enumerate(depths):
-        for backend_idx, backend in enumerate(backends):
-            axis_row = depth_idx * num_backends + backend_idx
-            backend_title = f", backend={backend}" if backend else ""
+    for ax in axes.ravel():
+        ax.set_visible(False)
 
-            for op_idx, operation in enumerate(operations):
-                ax = axes[axis_row][op_idx]
+    images = []
+    for panel in panels:
+        ax = axes[panel["axis_row"]][panel["op_idx"]]
+        ax.set_visible(True)
 
-                # Get all unique parameter combinations for this operation/depth/backend
-                op_rows = [
-                    r
-                    for r in rows
-                    if (
-                        r["operation"] == operation
-                        and r["m"] == m
-                        and r.get("backend", "") == backend
-                    )
-                ]
-                if not op_rows:
-                    ax.set_visible(False)
-                    continue
+        im = ax.imshow(
+            panel["matrix"],
+            aspect="auto",
+            cmap="viridis",
+            interpolation="nearest",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        images.append(im)
+        _configure_heatmap_axes(ax, panel, show_titles)
+        _annotate_heatmap(ax, panel["matrix"], annotation_threshold)
 
-                libraries = sorted(set(r["library"] for r in op_rows))
+    if images:
+        visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
+        cbar = fig.colorbar(
+            images[0],
+            ax=visible_axes,
+            location="right",
+            ticks=colorbar_ticks or None,
+        )
+        cbar.set_label("Runtime (ms)")
 
-                # Create unique combinations as row labels
-                params = sorted(set((r["N"], r["d"]) for r in op_rows))
-                param_labels = [f"N={n}, d={d}" for n, d in params]
-
-                # Build matrix: rows = parameter combos, columns = libraries
-                matrix = np.full((len(params), len(libraries)), np.nan)
-
-                for row_idx, (N, d) in enumerate(params):
-                    for col_idx, lib in enumerate(libraries):
-                        # Find timing for this combination
-                        for r in op_rows:
-                            if r["N"] == N and r["d"] == d and r["library"] == lib:
-                                matrix[row_idx, col_idx] = r["t_ms"]
-                                break
-
-                # Plot heatmap in milliseconds
-                im = ax.imshow(
-                    matrix,
-                    aspect="auto",
-                    cmap="viridis",
-                    interpolation="nearest",
-                )
-
-                # Configure axes
-                ax.set_xticks(np.arange(len(libraries)))
-                ax.set_yticks(np.arange(len(params)))
-                ax.set_xticklabels(libraries, rotation=45, ha="right")
-                ax.set_yticklabels(param_labels, fontsize=8)
-
-                ax.set_xlabel("Library")
-                ax.set_ylabel("Parameters")
-                ax.set_title(f"{operation}, m={m}{backend_title} - Runtime (ms)")
-
-                # Add colorbar
-                cbar = plt.colorbar(im, ax=ax)
-                cbar.set_label("Runtime (ms)")
-
-                # Add text annotations with actual values
-                finite_values = matrix[np.isfinite(matrix)]
-                threshold = (
-                    (np.nanmin(finite_values) + np.nanmax(finite_values)) / 2
-                    if finite_values.size
-                    else 0
-                )
-                for i in range(len(params)):
-                    for j in range(len(libraries)):
-                        if not np.isnan(matrix[i, j]):
-                            color = "black" if matrix[i, j] > threshold else "white"
-                            ax.text(
-                                j,
-                                i,
-                                f"{matrix[i, j]:.2g}",
-                                ha="center",
-                                va="center",
-                                color=color,
-                                fontsize=7,
-                            )
-
-    fig.tight_layout()
-
-    # Save plot
     if output_path is None:
         output_path = csv_path.parent / "plot_heatmap.png"
 
+    individual_dir = output_path.parent / "plot_heatmaps"
+    individual_dir.mkdir(parents=True, exist_ok=True)
+    colorbar_panel = (
+        max(panels, key=lambda panel: (panel["axis_row"], panel["op_idx"]))
+        if panels
+        else None
+    )
+    individual_figsize = _individual_heatmap_figsize(panels)
+    for panel in panels:
+        filename_parts = [
+            _safe_filename_part(panel["operation"]),
+            f"m-{_safe_filename_part(panel['m'])}",
+        ]
+        if panel["backend"]:
+            filename_parts.append(f"backend-{_safe_filename_part(panel['backend'])}")
+        filename = "_".join(filename_parts) + ".png"
+        _save_individual_heatmap(
+            panel,
+            individual_dir / filename,
+            vmin,
+            vmax,
+            colorbar_ticks,
+            annotation_threshold,
+            panel is colorbar_panel,
+            individual_figsize,
+        )
+
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Heatmap plot saved to: {output_path}")
+    print(f"Individual heatmaps saved to: {individual_dir}")
     plt.close(fig)
 
     return output_path
@@ -407,13 +706,11 @@ def make_speedup_plot(
         Ds = sorted(config.get("Ds", []))
         Ms = sorted(config.get("Ms", []))
         path_kind = config.get("path_kind", "sin")
-        operations_cfg = config.get("operations", ["signature", "logsignature"])
     else:
         Ns = sorted(set(r["N"] for r in rows))
         Ds = sorted(set(r["d"] for r in rows))
         Ms = sorted(set(r["m"] for r in rows))
         path_kind = rows[0]["path_kind"]
-        operations_cfg = sorted(set(r["operation"] for r in rows))
 
     # Fixed parameters for each subplot
     N_fixed_for_d = max(Ns)
@@ -423,22 +720,19 @@ def make_speedup_plot(
     m_fixed_for_N = max(Ms)
     m_fixed_for_d = max(Ms)
 
-    # Libraries present in data
-    libraries = sorted(set(r["library"] for r in rows))
+    series_keys = sorted(set(_series_key(r) for r in rows))
+    op_order = _ordered_operations(rows)
 
-    # Operation order for columns
-    op_order = ["signature", "logsignature", "sigdiff"]
-
-    # Create 3x3 grid
-    fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+    fig, axes = plt.subplots(
+        3,
+        len(op_order),
+        figsize=(5 * len(op_order), 12),
+        squeeze=False,
+    )
 
     for row_idx, vary in enumerate(["N", "d", "m"]):
         for col_idx, op in enumerate(op_order):
             ax = axes[row_idx, col_idx]
-
-            if op not in operations_cfg:
-                ax.set_visible(False)
-                continue
 
             # Determine x-axis values and fixed parameters
             if vary == "N":
@@ -460,7 +754,7 @@ def make_speedup_plot(
             plotted_any = False
 
             # Calculate speedups
-            for lib in libraries:
+            for series_key in series_keys:
                 speedups = []
                 xs_effective = []
 
@@ -474,10 +768,10 @@ def make_speedup_plot(
 
                     # Get times for all libraries at this point
                     times = {}
-                    for lib_name in libraries:
-                        t = get_time(rows, lib_name, N, d, m, path_kind, op)
+                    for candidate_key in series_keys:
+                        t = get_time(rows, candidate_key, N, d, m, path_kind, op)
                         if t is not None and t > 0.0:
-                            times[lib_name] = t
+                            times[candidate_key] = t
 
                     if not times:
                         continue
@@ -487,19 +781,31 @@ def make_speedup_plot(
                         baseline_time = max(times.values())
                     elif baseline == "fastest":
                         baseline_time = min(times.values())
-                    elif baseline in times:
-                        baseline_time = times[baseline]
                     else:
-                        baseline_time = max(times.values())  # fallback
+                        matching_keys = [
+                            key
+                            for key in times
+                            if baseline in (key[0], _series_label(key))
+                        ]
+                        baseline_time = (
+                            times[matching_keys[0]]
+                            if len(matching_keys) == 1
+                            else max(times.values())
+                        )
 
                     # Calculate speedup for this library
-                    if lib in times:
-                        speedup = baseline_time / times[lib]
+                    if series_key in times:
+                        speedup = baseline_time / times[series_key]
                         xs_effective.append(x)
                         speedups.append(speedup)
 
                 if len(xs_effective) >= 2:
-                    ax.plot(xs_effective, speedups, marker="o", label=lib)
+                    ax.plot(
+                        xs_effective,
+                        speedups,
+                        marker="o",
+                        label=_series_label(series_key),
+                    )
                     plotted_any = True
 
             if not plotted_any:
@@ -567,17 +873,24 @@ def make_profile_plot(
     if not rows:
         raise ValueError("No benchmark results found in CSV")
 
-    # Get unique operations and libraries
-    operations = sorted(set(r["operation"] for r in rows))
-    libraries = sorted(set(r["library"] for r in rows))
+    operations = _ordered_operations(rows)
+    series_keys = sorted(set(_series_key(r) for r in rows))
 
-    # Group by unique benchmark (N, d, m, operation combination)
+    # Group by complete workload identity.
     benchmarks = {}
     for r in rows:
-        key = (r["N"], r["d"], r["m"], r["operation"])
+        key = (
+            r["N"],
+            r["d"],
+            r["m"],
+            r["path_kind"],
+            r["operation"],
+            r["batch_size"],
+            r["seed"],
+        )
         if key not in benchmarks:
             benchmarks[key] = {}
-        benchmarks[key][r["library"]] = r["t_ms"]
+        benchmarks[key][_series_key(r)] = r["t_ms"]
 
     # Calculate performance ratios for each benchmark
     num_ops = len(operations)
@@ -589,14 +902,14 @@ def make_profile_plot(
         ax = axes[op_idx]
 
         # Filter benchmarks for this operation
-        op_benchmarks = {k: v for k, v in benchmarks.items() if k[3] == operation}
+        op_benchmarks = {k: v for k, v in benchmarks.items() if k[4] == operation}
 
         if not op_benchmarks:
             ax.set_visible(False)
             continue
 
         # For each library, calculate ratio to best time for each benchmark
-        library_ratios = {lib: [] for lib in libraries}
+        library_ratios = {series_key: [] for series_key in series_keys}
 
         for bench_key, times in op_benchmarks.items():
             if not times:
@@ -604,21 +917,27 @@ def make_profile_plot(
 
             best_time = min(times.values())
 
-            for lib in libraries:
-                if lib in times:
-                    ratio = times[lib] / best_time
-                    library_ratios[lib].append(ratio)
+            for series_key in series_keys:
+                if series_key in times:
+                    ratio = times[series_key] / best_time
+                    library_ratios[series_key].append(ratio)
 
         # Sort ratios and plot performance profile
-        for lib in libraries:
-            if not library_ratios[lib]:
+        for series_key in series_keys:
+            if not library_ratios[series_key]:
                 continue
 
-            ratios = sorted(library_ratios[lib])
+            ratios = sorted(library_ratios[series_key])
             # Y-axis: fraction of benchmarks where ratio <= x
             y_values = np.arange(1, len(ratios) + 1) / len(ratios)
 
-            ax.plot(ratios, y_values, marker="o", markersize=4, label=lib)
+            ax.plot(
+                ratios,
+                y_values,
+                marker="o",
+                markersize=4,
+                label=_series_label(series_key),
+            )
 
         ax.set_xlabel("Performance ratio (time / best_time)")
         ax.set_ylabel("Fraction of benchmarks")
@@ -664,9 +983,8 @@ def make_box_plot(
     if not rows:
         raise ValueError("No benchmark results found in CSV")
 
-    # Get unique operations and libraries
-    operations = sorted(set(r["operation"] for r in rows))
-    libraries = sorted(set(r["library"] for r in rows))
+    operations = _ordered_operations(rows)
+    series_keys = sorted(set(_series_key(r) for r in rows))
 
     # Create subplots for each operation
     num_ops = len(operations)
@@ -685,13 +1003,21 @@ def make_box_plot(
             continue
 
         # Organize data by library
-        data_by_lib = {lib: [] for lib in libraries}
+        data_by_lib = {series_key: [] for series_key in series_keys}
         for r in op_rows:
-            data_by_lib[r["library"]].append(r["t_ms"])
+            data_by_lib[_series_key(r)].append(r["t_ms"])
 
         # Filter out libraries with no data
-        plot_data = [data_by_lib[lib] for lib in libraries if data_by_lib[lib]]
-        plot_labels = [lib for lib in libraries if data_by_lib[lib]]
+        plot_data = [
+            data_by_lib[series_key]
+            for series_key in series_keys
+            if data_by_lib[series_key]
+        ]
+        plot_labels = [
+            _series_label(series_key)
+            for series_key in series_keys
+            if data_by_lib[series_key]
+        ]
 
         if not plot_data:
             ax.set_visible(False)
@@ -811,6 +1137,12 @@ Examples:
         help="Output directory for plots (defaults to run directory)"
     )
 
+    parser.add_argument(
+        "--no-titles",
+        action="store_true",
+        help="Disable subplot titles for heatmap plots"
+    )
+
     args = parser.parse_args()
 
     # List plot types if requested
@@ -862,7 +1194,7 @@ Examples:
     # Generate plots
     plot_funcs = {
         "line": (make_line_plot, {}),
-        "heatmap": (make_heatmap_plot, {}),
+        "heatmap": (make_heatmap_plot, {"show_titles": not args.no_titles}),
         "speedup": (make_speedup_plot, {"baseline": args.baseline}),
         "profile": (make_profile_plot, {}),
         "box": (make_box_plot, {}),

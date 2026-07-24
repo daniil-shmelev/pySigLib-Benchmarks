@@ -1,478 +1,182 @@
 # Signature Method Benchmark Suite
 
-Performance benchmarking suite for signature computation libraries with **strict isolation** and **methodological fairness**.
+A small orchestrator-and-adapter suite for benchmarking signature, log-signature,
+branched-signature, differentiation, and signature-kernel implementations.
 
-## Architecture
+The repository is intended to produce steady-state kernel-throughput measurements.
+Compilation, dependency startup, path generation, and input conversion are outside
+the timed region. Batched results report the latency of the complete batched call;
+the batch size is always retained in the data and plot identity.
 
-This benchmark suite uses an **Orchestrator-Adapter** architecture to ensure fair comparisons:
+## Benchmark protocol
 
-- **Orchestrator** ([src/orchestrator.py](src/orchestrator.py)): Main driver that coordinates benchmark execution
-- **Adapters**: Individual scripts for each library, running in isolated environments
-  - Python adapters use `uv run` with ephemeral environments
-  - Julia adapters use isolated `JULIA_PROJECT` environments
-- **Manual Timing Loops**: Identical timing methodology across languages (no timeit, pyperf, or BenchmarkTools)
+- Inputs use `float32` across Python, JAX, Torch, and Julia adapters.
+- Stochastic fBM inputs are generated from the configured `seed`. Each adapter
+  resets the same deterministic input sequence, so libraries and backends receive
+  matching data for a given task.
+- JAX kernels are JIT-compiled during warmup and synchronized with
+  `block_until_ready()` during measurement.
+- Each timed iteration is retained in `samples_ms`.
+- `t_ms` is the sample median; `t_ms_mean` and `t_ms_std` are also recorded.
+- Adapter errors stop the run while preserving every completed result for resume.
+- CPU/GPU, method, path representation, and batch variants remain distinct in
+  every plot.
 
-## Libraries Benchmarked
+The allocation column is a diagnostic only. Python `tracemalloc` does not measure
+native or GPU allocations and should not be used for cross-language memory claims.
 
-- **iisignature** (Python, industry standard)
-- **pysiglib** (Python, JAX API)
-- **stochastax** (Python/JAX)
-- **chen-signatures** (Python, with autodiff support)
-- **ChenSignatures.jl** (Julia)
+## Requirements
 
-## Features
+- Python 3.12
+- [uv](https://docs.astral.sh/uv/)
+- Rust 1.89 or newer to build the pinned `signature-rs` Python binding
+- A CUDA-capable environment for GPU registry entries
+- Julia 1.10 only when the Julia adapter is enabled
 
-- **Strict Isolation**: Each library runs in its own ephemeral environment
-- **Methodological Fairness**: Identical manual timing loops across all languages
-- **Setup/Kernel Separation**: Only the computation is timed, not data preparation
-- **Multiple Operations**: signature, logsignature, branched signatures, sigdiff (autodiff)
-- **Scaling Analysis**: Varies N (path length), d (dimension), m (signature level)
+The tracked `uv.lock` and Julia `Manifest.toml` pin the software environments.
+Git-based Python dependencies are pinned to commit revisions in `pyproject.toml`.
+`signature-py` is not currently published on PyPI, so its first installation
+builds the pinned Rust workspace source; subsequent runs reuse `uv`'s build cache.
+`log-signatures-pytorch` 0.1.11 is pure Python and runs on Python 3.12, despite
+wheel metadata requiring Python 3.13. Its registry entry therefore pins the exact
+PyPI wheel and SHA-256 digest; the orchestrator installs it once into the ignored
+`.adapter_packages/` cache using a package-specific compatibility override.
 
-## Latest Public Run (2025-12-02)
+## Run
 
-The newest full benchmark is checked into the repo at `runs/benchmark_20251202_223554/` so results are browseable without rerunning.
-
-- Data: [`results.csv`](runs/benchmark_20251202_223554/results.csv)
-- Plots: [`plot_heatmap.png`](runs/benchmark_20251202_223554/plot_heatmap.png), [`plot_speedup_slowest.png`](runs/benchmark_20251202_223554/plot_speedup_slowest.png), [`plot_profile.png`](runs/benchmark_20251202_223554/plot_profile.png), [`plot_box.png`](runs/benchmark_20251202_223554/plot_box.png), [`plot_line.png`](runs/benchmark_20251202_223554/plot_line.png)
-- Config snapshots: [`benchmark_sweep.yaml`](runs/benchmark_20251202_223554/benchmark_sweep.yaml), [`libraries_registry.yaml`](runs/benchmark_20251202_223554/libraries_registry.yaml)
-
-![Benchmark heatmap preview](runs/benchmark_20251202_223554/plot_heatmap.png)
-
----
-
-## 📋 Prerequisites
-
-To run the benchmarks, you need:
-
-1. **Julia** ≥ 1.10
-2. **Python** ≥ 3.9
-3. **[uv](https://github.com/astral-sh/uv)** – fast Python package manager
-
-Install `uv`:
+Run the configured benchmark sweep:
 
 ```bash
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Windows (PowerShell)
-irm https://astral.sh/uv/install.ps1 | iex
+uv run src/orchestrator.py
 ```
 
----
+Run the small smoke configuration:
 
-## 🚀 Quick Start
+```bash
+uv run src/orchestrator.py config/smoke.yaml
+```
 
-### Run Everything (Benchmarks + Plots)
+Continue an interrupted run using its saved configurations:
+
+```bash
+uv run src/orchestrator.py --resume runs/benchmark_TIMESTAMP
+```
+
+`results.csv` is appended and flushed after every successful adapter task.
+`completed_tasks.txt` records which task IDs are safe to skip. On resume, any
+uncommitted final rows are discarded and only missing tasks are executed.
+
+Run benchmarks and generate every plot:
 
 ```bash
 uv run run_benchmarks.py
 ```
 
-This single command will:
-1. Run all benchmarks with configured libraries
-2. Generate comparison plots automatically
-3. Show you the output directory
+Generate plots from a specific run or CSV:
 
-### Run Individual Steps
-
-If you want more control:
-
-**Benchmarks only:**
 ```bash
-uv run src/orchestrator.py
+uv run src/plotting.py runs/benchmark_TIMESTAMP --plot-type all
+uv run src/plotting.py path/to/results.csv --plot-type heatmap
 ```
 
-**Plots only:**
-```bash
-# Generate all plot types on latest run
-uv run src/plotting.py --plot-type all
+Available plot types are `line`, `heatmap`, `speedup`, `profile`, and `box`.
+Line and speedup layouts are derived from all operations actually present in the
+CSV, including branched signatures and signature kernels.
 
-# Generate specific plot type
-uv run src/plotting.py --plot-type heatmap
+## Configuration
 
-# Use specific run directory
-uv run src/plotting.py runs/benchmark_TIMESTAMP --plot-type speedup
-
-# List available plot types
-uv run src/plotting.py --list-plots
-```
-
-### Plot Types Available
-
-The plotting tool generates multiple visualization types:
-
-- **`line`** - Original 3×3 grid of line plots showing absolute performance
-- **`heatmap`** - Complete performance landscape across all parameter combinations in milliseconds
-- **`speedup`** - Relative performance showing speedup vs baseline (default: slowest library)
-- **`profile`** - Performance profile showing how often each library is competitive
-- **`box`** - Distribution of performance across all benchmarks with outliers
-- **`all`** - Generate all plot types at once (default)
-
-**Examples:**
-```bash
-# Generate all plots
-uv run src/plotting.py
-
-# Only heatmap
-uv run src/plotting.py -t heatmap
-
-# Speedup vs fastest library instead of slowest
-uv run src/plotting.py -t speedup --baseline fastest
-
-# Speedup vs specific library
-uv run src/plotting.py -t speedup --baseline iisignature
-```
-
-### What Gets Created
-
-Each run creates a timestamped folder in `runs/` containing:
-- `results.csv` - All benchmark results
-- `plot_line.png` - Line plot (original 3×3 grid)
-- `plot_heatmap.png` - Heatmap of all benchmarks
-- `plot_speedup_slowest.png` - Speedup plot vs slowest
-- `plot_profile.png` - Performance profile
-- `plot_box.png` - Box plot distribution
-- `benchmark_sweep.yaml` - Config snapshot
-- `libraries_registry.yaml` - Registry snapshot
-
----
-
-## 📁 Repository Structure
-
-```
-.
-├── config/
-│   ├── benchmark_sweep.yaml       # Parameter sweep configuration
-│   └── libraries_registry.yaml    # Library adapter registry
-├── src/
-│   ├── orchestrator.py            # Main benchmark driver
-│   ├── plotting.py                # Plot generation
-│   └── common/                    # Shared utilities (injectable)
-│       ├── __init__.py
-│       ├── adapter.py             # BenchmarkAdapter base class
-│       └── paths.py               # Path generation utilities
-├── adapters/
-│   ├── python/                    # Python adapter scripts
-│   │   ├── run_iisignature.py
-│   │   ├── run_pysiglib.py
-│   │   └── run_chen.py
-│   └── julia/                     # Julia adapter project
-│       ├── Project.toml
-│       └── run_chen.jl
-├── runs/                          # Benchmark output folders
-└── pyproject.toml                 # Orchestrator dependencies
-```
-
-### Run Folder Contents
-
-Each benchmark run creates a timestamped folder:
-
-```
-runs/benchmark_20251201_143022/
-├── benchmark_sweep.yaml          # Config snapshot
-├── libraries_registry.yaml       # Registry snapshot
-├── results.csv                   # Aggregated benchmark results
-├── plot_line.png                 # Line plot (3×3 grid)
-├── plot_heatmap.png              # Heatmap visualization
-├── plot_speedup_slowest.png      # Speedup plot
-├── plot_profile.png              # Performance profile
-└── plot_box.png                  # Box plot distribution
-```
-
----
-
-## ⚙️ Configuration
-
-### Benchmark Sweep ([config/benchmark_sweep.yaml](config/benchmark_sweep.yaml))
-
-Defines the parameter grid:
+`config/benchmark_sweep.yaml` defines the main parameter grid:
 
 ```yaml
-path_kind: "sin"               # "linear" or "sin"
-
-Ns: [200, 400, 800]            # Path lengths
-Ds: [2, 5, 7]                  # Dimensions
-Ms: [2, 3, 4]                  # Signature levels
-
+path_kind: fbm
+seed: 20260529
+Ns: [200, 400, 800, 1600]
+Ds: [2, 4, 8, 12, 16, 20]
+Ms: [2, 3]
 operations:
   - signature
   - logsignature
-  - sigdiff
   - branchedsignature_nonplanar
   - branchedsignature_planar
-
-repeats: 10                    # Timing loop iterations
-runs_dir: "runs"
+backends: [cpu, gpu]
+batch_size: 256
+repeats: 10
+runs_dir: runs
 ```
 
-### Library Registry ([config/libraries_registry.yaml](config/libraries_registry.yaml))
+`config/libraries_registry.yaml` controls which adapters are active. The current
+working registry enables CPU-only `iisignature`, `RoughPy`, and `signature-rs`,
+plus CPU/GPU `log-signatures-pytorch` and `pysiglib`; other adapters remain
+available in `adapters/` and should be enabled deliberately for a comparison run.
 
-Defines available adapters and their dependencies:
+RoughPy and `signature-rs` expose only single-path APIs, so their method labels
+identify the simple Python `batch_loop` used to process the common batched
+workload. These measurements are public-API batch throughput, including Python
+loop overhead, rather than native batched-kernel throughput. `iisignature` accepts
+the batch natively, while JAX/Torch adapters use native batching or compiled
+vectorization. `log-signatures-pytorch` uses its native batched API in float32:
+eager mode on CPU and `torch.compile(mode="reduce-overhead")` on GPU, with
+compilation in warmup and CUDA synchronization in every measured call. The
+`chen-signatures` adapter skips batch sizes above one.
 
-```yaml
-libraries:
-  iisignature:
-    type: python
-    script: "adapters/python/run_iisignature.py"
-    deps: ["iisignature", "numpy"]
-    operations: ["signature", "logsignature"]
+RoughPy's float32 increments and algebra context are prepared outside timing, but
+each measured call constructs a fresh stream so RoughPy's interval cache cannot
+turn repetitions into cache lookups. The `signature-rs` builder and contiguous
+float32 input are prepared outside timing; its binding still performs its internal
+NaN check, input copy, basis construction, and log-signature calculation during
+each measured call.
 
-  ChenSignatures.jl:
-    type: julia
-    dir: "adapters/julia"
-    script: "run_chen.jl"
-    operations: ["signature", "logsignature"]
+Focused configurations are provided for branched signatures and signature
+kernels:
+
+- `config/bnrde_sweep.yaml`
+- `config/signature_kernel_sweep.yaml`
+- `config/smoke.yaml`
+
+## Run artifacts
+
+Each run creates `runs/benchmark_TIMESTAMP/` containing:
+
+- `results.csv`
+- `completed_tasks.txt`
+- `benchmark_sweep.yaml`
+- `libraries_registry.yaml`
+- `metadata.json`
+- `uv.lock`
+
+`metadata.json` records the timestamp, git commit and dirty state, Python/platform
+information, Julia and uv versions, visible GPU/driver information when available,
+and relevant backend/thread environment variables.
+
+The CSV contains:
+
+```text
+task_id,N,d,m,batch_size,seed,path_kind,operation,backend,language,library,
+method,path_type,t_ms,t_ms_mean,t_ms_std,samples_ms,alloc_bytes
 ```
 
-**Note:** Large configurations (high N × d × m) can take significant time. Start small for testing.
+For a batched signature calculation, `t_ms` is the latency of one call processing
+`batch_size` paths. For a signature-kernel calculation, one call produces a
+`batch_size × batch_size` kernel matrix. Do not interpret these values as
+single-path latency.
 
----
+## Adding an adapter
 
-## 📊 Output Format
+Python adapters subclass `common.BenchmarkAdapter` and return a callable whose
+body contains only the operation being measured. Register the adapter in
+`config/libraries_registry.yaml` with its optional dependency group and supported
+operations.
 
-### CSV Schema
+Every asynchronous backend must synchronize before returning from the callable.
+Input conversion, basis construction, and JIT construction belong in setup unless
+the experiment is explicitly defined as end-to-end.
 
-All benchmarks output to a unified CSV format:
-
-```csv
-N,d,m,path_kind,operation,language,library,method,path_type,t_ms
-200,2,2,sin,signature,python,iisignature,sig,ndarray,0.123
-200,2,2,sin,signature,julia,ChenSignatures.jl,signature_path,Vector{SVector},0.089
-```
-
-**Columns:**
-- `N`, `d`, `m`: Problem parameters (path length, dimension, signature level)
-- `path_kind`: Path generator type (`linear`, `sin`, or `fbm`)
-- `operation`: Operation type (`signature`, `logsignature`, `sigdiff`,
-  `branchedsignature_nonplanar`, or `branchedsignature_planar`)
-- `language`: `julia` or `python`
-- `library`: Implementation name
-- `method`: Specific method/function called
-- `path_type`: Input data structure (`ndarray`, `Vector{SVector}`, `torch`, etc.)
-- `t_ms`: Average time in milliseconds (averaged over `repeats` iterations)
-
----
-
-## 🔧 How It Works
-
-### Isolation Guarantees
-
-Each library benchmark runs in complete isolation:
-
-**Python adapters:**
-```bash
-uv run --with <dep1> --with <dep2> python <script> '<json_config>'
-```
-
-- `uv run` creates an ephemeral environment per invocation
-- Dependencies are injected via `--with` flags
-- Adapters add `src/` to `sys.path` to access common utilities
-- No shared virtualenv or global state
-
-**Julia adapters:**
-```bash
-JULIA_PROJECT=adapters/julia julia run_chen.jl '<json_config>'
-```
-
-- Each adapter has its own `Project.toml`
-- No shared global Julia environment
-
-### Manual Timing Loop
-
-All adapters use the same timing methodology (no timeit/pyperf/BenchmarkTools):
-
-**Python:**
-```python
-# Warmup (untimed)
-for _ in range(3):
-    func()
-
-# Timed loop with GC disabled
-gc.disable()
-t0 = time.perf_counter()
-for _ in range(repeats):
-    func()
-t1 = time.perf_counter()
-gc.enable()
-
-avg_time_ms = ((t1 - t0) / repeats) * 1000
-```
-
-**Julia:**
-```julia
-# Warmup (untimed)
-for _ in 1:3
-    func()
-end
-
-# Timed loop with GC disabled
-GC.enable(false)
-t0 = time_ns()
-for _ in 1:repeats
-    func()
-end
-t1 = time_ns()
-GC.enable(true)
-
-avg_time_ms = ((t1 - t0) / repeats) / 1e6
-```
-
-### Setup/Kernel Separation
-
-Adapters separate "Setup" (untimed) from "Kernel" (timed):
-
-```python
-def run_signature(self, path, d, m):
-    # Setup phase (untimed): data casting, basis preparation
-    path = np.ascontiguousarray(path, dtype=np.float64)
-
-    # Return kernel closure (only this is timed)
-    return lambda: iisignature.sig(path, m)
-```
-
----
-
-## 📈 Interpreting Results
-
-### Understanding the Plots
-
-**Line Plot (`plot_line.png`):**
-- 3×3 grid showing absolute timing (ms)
-- Rows: vary N, d, or m
-- Columns: different operations
-- Lower lines = faster performance
-
-**Heatmap (`plot_heatmap.png`):**
-- Splits panels by operation and signature depth
-- Rows show N/d combinations for a fixed depth
-- Darker colors (blue/purple) = faster
-- Lighter colors (yellow) = slower
-- Numbers show actual milliseconds
-- Best for seeing the complete performance landscape
-
-**Speedup Plot (`plot_speedup_slowest.png`):**
-- Same layout as line plot but shows relative performance
-- Y-axis = speedup factor (higher is better)
-- Dashed line at 1.0 = baseline (slowest library)
-- Easier to see winners than absolute timing
-
-**Performance Profile (`plot_profile.png`):**
-- X-axis: performance ratio (time / best_time)
-- Y-axis: fraction of benchmarks
-- Curves hugging the left edge = consistently fast
-- Used in academic optimization papers
-
-**Box Plot (`plot_box.png`):**
-- Shows distribution across all benchmarks
-- Box = quartiles, line = median
-- Circles = outliers
-- Log scale if data spans multiple orders of magnitude
-
-### Performance Comparison
-
-From `SUMMARY.txt` in comparison runs:
-
-```
-ChenSignatures.jl(Matrix) vs iisignature: avg speedup = 5.00x
-ChenSignatures.jl(Vector{SVector}) vs iisignature: avg speedup = 5.40x
-```
-
-- **Matrix vs Vector{SVector}:** Vector{SVector} is typically 5-10% faster
-- **vs iisignature:** Julia is 5-7× faster
-- **vs pysiglib:** Julia is 25-30× faster
-
-### Validation
-
-From `SUMMARY.txt` in validation runs:
-
-```
-Total tests: 24
-Passed:      24
-Failed:      0
-Pass rate:   100.0%
-```
-
-All implementations should agree within numerical tolerance (`rel_err < 1e-7`).
-
----
-
-## 🛠️ Development
-
-### Adding a New Library
-
-1. **Create adapter script** in `adapters/python/` or `adapters/julia/`
-2. **Inherit from BenchmarkAdapter** (Python) or implement equivalent (Julia)
-3. **Register in** [config/libraries_registry.yaml](config/libraries_registry.yaml):
-   ```yaml
-   my-library:
-     type: python
-     script: "adapters/python/run_mylib.py"
-     deps: ["my-library", "numpy"]
-     operations: ["signature"]
-   ```
-
-### Adding a New Path Generator
-
-Edit [src/common/paths.py](src/common/paths.py):
-
-```python
-def make_path_custom(d: int, N: int) -> np.ndarray:
-    # Your custom path generation logic
-    pass
-
-def make_path(d: int, N: int, kind: str) -> np.ndarray:
-    # Add to dispatcher
-    if kind == "custom":
-        return make_path_custom(d, N)
-```
-
-For Julia, update [adapters/julia/run_chen.jl](adapters/julia/run_chen.jl) similarly.
-
----
-
-## 🐛 Troubleshooting
-
-### Julia dependencies not installed
+## Tests
 
 ```bash
-cd adapters/julia
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
+uv run --with pytest pytest -q
 ```
 
-### Python dependencies missing
-
-The orchestrator dependencies should be automatically available via `pyproject.toml`. If you have issues:
-
-```bash
-uv sync
-```
-
-### Benchmarks taking too long
-
-Reduce grid size in [config/benchmark_sweep.yaml](config/benchmark_sweep.yaml):
-```yaml
-Ns: [200, 400]     # Fewer values
-Ds: [2, 5]
-Ms: [2, 3]
-repeats: 5         # Fewer iterations
-```
-
-### Adapter fails to run
-
-Check the library is available:
-```bash
-# Python
-uv run python -c "import iisignature; print(iisignature.__version__)"
-
-# Julia
-julia --project=adapters/julia -e 'using ChenSignatures'
-```
-
----
-
-## 📚 Libraries
-
-- **ChenSignatures.jl:** [GitHub](https://github.com/improbable-research/ChenSignatures.jl)
-- **chen-signatures:** Python bindings for ChenSignatures.jl
-- **iisignature:** [GitHub](https://github.com/bottler/iisignature)
-- **pysiglib:** [GitHub](https://github.com/crispitagorico/pysiglib)
+The tests cover path generation, adapter wiring, signature-kernel wiring, and plot
+generation. A paper run should additionally be inspected for complete task
+coverage and stable timing distributions before figures are produced.
