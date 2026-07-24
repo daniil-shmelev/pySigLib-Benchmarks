@@ -1,11 +1,9 @@
 .venv/
+.adapter_packages/
 __pycache__/
 *.pyc
 .python-version
-uv.lock
 *.egg-info/
 dist/
 build/
-runs/*
-!runs/benchmark_20251202_223554/
-!runs/benchmark_20251202_223554/**
+runs/
