@@ -49,6 +49,20 @@ libraries:
       - logsignature
       - sigdiff
 
+  pathsig:
+    type: python
+    script: "adapters/python/run_pathsig.py"
+    extras:
+      - pathsig
+    backend: gpu
+    env:
+      CMAKE_ARGS: "-DCUDA_nvrtc_LIBRARY={repo_root}/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libnvrtc.so.13"
+      TORCH_CUDA_ARCH_LIST: "12.0"
+    operations:
+      - signature
+      - logsignature
+      - sigdiff
+
   pysiglib:
     type: python
     script: "adapters/python/run_pysiglib.py"

@@ -12,6 +12,29 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import orchestrator
 
 
+def test_python_adapter_expands_repo_root_in_environment(tmp_path, monkeypatch):
+    script = tmp_path / "adapter.py"
+    script.write_text("", encoding="utf-8")
+    monkeypatch.setattr(orchestrator, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(orchestrator, "ensure_compatibility_wheel", lambda *args: None)
+    captured = {}
+
+    def fake_run(command, *, env=None):
+        captured.update(env)
+        return '{"library": "example"}\n'
+
+    monkeypatch.setattr(orchestrator, "run_subprocess_capture", fake_run)
+    result = orchestrator.run_python_adapter(
+        "example",
+        {"script": "adapter.py"},
+        {},
+        env_overrides={"EXAMPLE_PATH": "{repo_root}/dependency"},
+    )
+
+    assert result == {"library": "example"}
+    assert captured["EXAMPLE_PATH"] == str(tmp_path / "dependency")
+
+
 def test_compatibility_wheel_is_installed_once(tmp_path, monkeypatch):
     packages_dir = tmp_path / "adapter-packages"
     monkeypatch.setattr(

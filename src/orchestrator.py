@@ -197,6 +197,7 @@ def write_run_metadata(run_dir: Path, sweep_config: Path) -> None:
         "sweep_config": str(sweep_config),
         "uv_version": _command_output(["uv", "--version"]),
         "julia_version": _command_output(["julia", "--version"]),
+        "nvcc_version": _command_output(["nvcc", "--version"]),
         "gpu": _command_output([
             "nvidia-smi",
             "--query-gpu=name,driver_version",
@@ -206,10 +207,13 @@ def write_run_metadata(run_dir: Path, sweep_config: Path) -> None:
             key: os.environ[key]
             for key in (
                 "CUDA_VISIBLE_DEVICES",
+                "CUDA_HOME",
+                "CMAKE_ARGS",
                 "JAX_PLATFORM_NAME",
                 "OMP_NUM_THREADS",
                 "MKL_NUM_THREADS",
                 "OPENBLAS_NUM_THREADS",
+                "TORCH_CUDA_ARCH_LIST",
                 "XLA_FLAGS",
             )
             if key in os.environ
@@ -370,7 +374,10 @@ def run_python_adapter(
     try:
         env = os.environ.copy()
         if env_overrides:
-            env.update({key: str(value) for key, value in env_overrides.items()})
+            env.update({
+                key: str(value).replace("{repo_root}", str(REPO_ROOT))
+                for key, value in env_overrides.items()
+            })
 
         compatibility_path = ensure_compatibility_wheel(
             library_name,

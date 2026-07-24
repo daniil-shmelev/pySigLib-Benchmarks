@@ -28,6 +28,13 @@ signature-rs = [
 log-signatures-pytorch = [
     "torch>=2.9.1",
 ]
+pathsig = [
+    "cmake>=3.24",
+    "ninja>=1.11",
+    "pathsig==0.2.1",
+    "scikit-build-core>=0.10",
+    "torch>=2.4",
+]
 pysiglib = [
     "pysiglib[cuda]>=3.0.3",
 ]
@@ -42,10 +49,14 @@ polysigkernel = [
 all = [
     "chen-signatures==0.2.4",
     # "iisignature",
+    "cmake>=3.24",
     "fbm>=0.3.0",
     "jax[cuda]",
+    "ninja>=1.11",
     "pysiglib[cuda]>=3.0.3",
+    "pathsig==0.2.1",
     "RoughPy==0.3.0",
+    "scikit-build-core>=0.10",
     "signature-py",
     "stochastax",
     "signax",
@@ -62,3 +73,6 @@ signature-py = { git = "https://github.com/ChosunOne/signature-rs.git", subdirec
 
 [tool.uv.extra-build-dependencies]
 iisignature = ["numpy"]
+
+[tool.uv]
+no-build-isolation-package = ["pathsig"]

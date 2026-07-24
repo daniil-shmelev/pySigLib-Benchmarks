@@ -41,6 +41,9 @@ builds the pinned Rust workspace source; subsequent runs reuse `uv`'s build cach
 wheel metadata requiring Python 3.13. Its registry entry therefore pins the exact
 PyPI wheel and SHA-256 digest; the orchestrator installs it once into the ignored
 `.adapter_packages/` cache using a package-specific compatibility override.
+`pathsig` is a CUDA-only source distribution. Its extension is built once
+against the locked runtime Torch using uv's package-specific build-isolation
+override and then reused from uv's cache.
 
 ## Run
 
@@ -107,7 +110,7 @@ runs_dir: runs
 `config/libraries_registry.yaml` controls which adapters are active. The current
 working registry enables CPU-only `iisignature`, `RoughPy`, and `signature-rs`,
 plus CPU/GPU `log-signatures-pytorch` and `pysiglib`; other adapters remain
-available in `adapters/` and should be enabled deliberately for a comparison run.
+available in `adapters/`. GPU-only `pathsig` is also enabled.
 
 RoughPy and `signature-rs` expose only single-path APIs, so their method labels
 identify the simple Python `batch_loop` used to process the common batched
@@ -118,6 +121,10 @@ vectorization. `log-signatures-pytorch` uses its native batched API in float32:
 eager mode on CPU and `torch.compile(mode="reduce-overhead")` on GPU, with
 compilation in warmup and CUDA synchronization in every measured call. The
 `chen-signatures` adapter skips batch sizes above one.
+
+`pathsig` uses native float32 CUDA batches without an additional compilation
+wrapper. Its log-signature benchmark uses the canonical Lyndon projection so the
+output is compact rather than the library's default full word-basis tensor.
 
 RoughPy's float32 increments and algebra context are prepared outside timing, but
 each measured call constructs a fresh stream so RoughPy's interval cache cannot
