@@ -1,0 +1,57 @@
+# benchmark_sweep.yaml
+# Focused sweep: 2 dimensions, higher truncation depths
+
+path_kind: "fbm"
+seed: 20260529
+
+# Path lengths
+Ns: [512]
+
+# Dimensions: low (fast, high-m friendly) vs high (stress test)
+Ds:
+    [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+    ]
+
+# Depths: skip trivial cases, go deeper
+Ms: [2]
+
+operations:
+    - logsignature
+    - branchedsignature_nonplanar
+    - branchedsignature_planar
+
+# Backend labels defined per library in libraries_registry.yaml.
+# Use [cpu], [gpu], or [cpu, gpu] to choose the experiment scope.
+backends:
+    - gpu
+
+batch_size: 256
+
+repeats: 10
+
+logsig_method: "S"
+
+runs_dir: "runs"

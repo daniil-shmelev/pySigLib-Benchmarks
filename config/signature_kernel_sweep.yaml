@@ -1,0 +1,44 @@
+# signature_kernel_sweep.yaml
+# Focused sweep for pairwise signature-kernel matrix benchmarks.
+
+path_kind: "fbm"
+seed: 20260529
+
+# Path lengths
+Ns: [200, 400, 800]
+
+# Dimensions: low (fast, high-m friendly) vs high (stress test)
+Ds: [2, 4, 8, 16]
+
+# Placeholder sweep axis retained for the standard results schema.
+# Signature-kernel libraries use the independent per-library settings below.
+Ms: [3]
+
+operations:
+    - signaturekernel
+
+# Backend labels defined per library in libraries_registry.yaml.
+# Use [cpu], [gpu], or [cpu, gpu] to choose the experiment scope.
+backends:
+    # - cpu
+    - gpu
+
+# Paths in X and Y per timed kernel-matrix call, producing batch_size x batch_size outputs.
+batch_size: 32
+
+repeats: 10
+
+# polysigkernel options
+sig_kernel_solver: "monomial_approx"
+sig_kernel_max_batch: -1
+
+# Per-library native accuracy controls.
+# polysigkernel: order is the monomial expansion order.
+# pySigLib: dyadic_order refines the PDE grid by 2^dyadic_order.
+library_configs:
+    polysigkernel:
+        sig_kernel_order: 3
+    pysiglib:
+        sig_kernel_dyadic_order: 1
+
+runs_dir: "runs"

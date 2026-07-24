@@ -2,14 +2,52 @@
 # Registry of adapters and their dependencies
 
 libraries:
-  # iisignature:
-  #   type: python
-  #   script: "adapters/python/run_iisignature.py"
-  #   extras:
-  #     - iisignature
-  #   operations:
-  #     - signature
-  #     - logsignature
+  iisignature:
+    type: python
+    script: "adapters/python/run_iisignature.py"
+    extras:
+      - iisignature
+    backend: cpu
+    operations:
+      - signature
+      - logsignature
+
+  roughpy:
+    type: python
+    script: "adapters/python/run_roughpy.py"
+    extras:
+      - roughpy
+    backend: cpu
+    operations:
+      - signature
+      - logsignature
+
+  signature-rs:
+    type: python
+    script: "adapters/python/run_signature_rs.py"
+    extras:
+      - signature-rs
+    backend: cpu
+    operations:
+      - logsignature
+
+  log-signatures-pytorch:
+    type: python
+    script: "adapters/python/run_log_signatures_pytorch.py"
+    extras:
+      - log-signatures-pytorch
+    # This pure-Python wheel works on 3.12, but its metadata declares >=3.13.
+    # The orchestrator installs only this exact verified wheel while ignoring
+    # that marker.
+    compatibility_wheel:
+      url: "https://files.pythonhosted.org/packages/b1/fa/c1db4a19fc3d277371bc43db96cd01794bdf39dbb99c5a50a2b0678da1c5/log_signatures_pytorch-0.1.11-py3-none-any.whl#sha256=86f38e0b9453a9ac02e818a4f49b8aaf5020f7f790318504515550d0ef726921"
+    backends:
+      - name: cpu
+      - name: gpu
+    operations:
+      - signature
+      - logsignature
+      - sigdiff
 
   pysiglib:
     type: python
@@ -29,6 +67,22 @@ libraries:
       - sigdiff
       - branchedsignature_nonplanar
       - branchedsignature_planar
+      - signaturekernel
+
+  polysigkernel:
+    type: python
+    script: "adapters/python/run_polysigkernel.py"
+    extras:
+      - polysigkernel
+    backends:
+      - name: cpu
+        env:
+          JAX_PLATFORM_NAME: cpu
+      - name: gpu
+        env:
+          JAX_PLATFORM_NAME: gpu
+    operations:
+      - signaturekernel
 
   stochastax:
     type: python
