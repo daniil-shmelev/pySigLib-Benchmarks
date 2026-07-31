@@ -1,11 +1,14 @@
 """Base benchmark adapter with manual timing loop"""
 
 import gc
+import hashlib
 import json
+import os
 import statistics
 import sys
 import time
 import tracemalloc
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -58,12 +61,75 @@ class BenchmarkAdapter:
         self.seed = int(config.get("seed", 0))
         self._input_index = 0
 
+    def _cached_fbm_input(self, logical_seed: int) -> Optional[np.ndarray]:
+        """Load a saved fBM input, or generate and save it atomically."""
+        cache_dir = self.config.get("input_cache_dir")
+        if cache_dir is None or self.path_kind.lower() != "fbm":
+            return None
+
+        cache_path = Path(cache_dir) / (
+            f"fbm_h0p33_seed{logical_seed}_N{self.N}_d{self.d}"
+            f"_batch{self.batch_size}.npy"
+        )
+        checksum_path = cache_path.with_suffix(".npy.sha256")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not cache_path.exists():
+            if self.batch_size == 1:
+                path = make_path(self.d, self.N, self.path_kind)
+            else:
+                path = make_path_batch(
+                    self.d,
+                    self.N,
+                    self.path_kind,
+                    self.batch_size,
+                )
+
+            temporary_path = cache_path.with_name(
+                f".{cache_path.name}.{os.getpid()}.tmp"
+            )
+            with temporary_path.open("wb") as cache_file:
+                np.save(cache_file, path, allow_pickle=False)
+                cache_file.flush()
+                os.fsync(cache_file.fileno())
+            os.replace(temporary_path, cache_path)
+
+        if not checksum_path.exists():
+            digest = hashlib.sha256(cache_path.read_bytes()).hexdigest()
+            temporary_checksum = checksum_path.with_name(
+                f".{checksum_path.name}.{os.getpid()}.tmp"
+            )
+            temporary_checksum.write_text(
+                f"{digest}  {cache_path.name}\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary_checksum, checksum_path)
+
+        path = np.load(cache_path, allow_pickle=False)
+        expected_shape = (
+            (self.N, self.d)
+            if self.batch_size == 1
+            else (self.batch_size, self.N, self.d)
+        )
+        if path.shape != expected_shape or path.dtype != np.float32:
+            raise ValueError(
+                f"Invalid cached input {cache_path}: expected float32 shape "
+                f"{expected_shape}, got {path.dtype} shape {path.shape}"
+            )
+        return path
+
     def make_path_input(self):
         """Generate this benchmark's input path, batched when requested."""
         # fbm uses NumPy's legacy global RNG internally. Reset it for each
         # logical input so every library/backend receives the same path data.
-        np.random.seed(self.seed + self._input_index)
+        logical_seed = self.seed + self._input_index
+        np.random.seed(logical_seed)
         self._input_index += 1
+
+        cached_path = self._cached_fbm_input(logical_seed)
+        if cached_path is not None:
+            return cached_path
+
         if self.batch_size == 1:
             return make_path(self.d, self.N, self.path_kind)
         return make_path_batch(self.d, self.N, self.path_kind, self.batch_size)
@@ -83,7 +149,7 @@ class BenchmarkAdapter:
         Returns:
             Tuple of (median_time_ms, alloc_bytes, samples_ms):
                 - median_time_ms: Median time per iteration in milliseconds
-                - alloc_bytes: Average bytes allocated per iteration
+                - alloc_bytes: Average net traced Python heap change per iteration
                 - samples_ms: Raw time for every measured iteration
         """
         # Warmup phase (untimed)
@@ -109,7 +175,8 @@ class BenchmarkAdapter:
 
         median_time_ms = statistics.median(samples_ms)
 
-        # Calculate average bytes allocated per iteration
+        # This tracks only the net Python heap change visible to tracemalloc.
+        # It excludes native allocations, framework pools, and device memory.
         total_alloc_bytes = mem1_current - mem0_current
         avg_alloc_bytes = total_alloc_bytes // self.repeats if self.repeats > 0 else 0
 

@@ -99,6 +99,7 @@ Ms: [2, 3]
 operations:
   - signature
   - logsignature
+  - sigdiff
   - branchedsignature_nonplanar
   - branchedsignature_planar
 backends: [cpu, gpu]
@@ -108,9 +109,9 @@ runs_dir: runs
 ```
 
 `config/libraries_registry.yaml` controls which adapters are active. The current
-working registry enables CPU-only `iisignature`, `RoughPy`, and `signature-rs`,
-plus CPU/GPU `log-signatures-pytorch` and `pysiglib`; other adapters remain
-available in `adapters/`. GPU-only `pathsig` is also enabled.
+registry enables CPU-only `iisignature`, `RoughPy`, `signature-rs`, and
+`chen-signatures`; CPU/GPU `log-signatures-pytorch`, `pysiglib`, `polysigkernel`,
+Stochastax, Signax, TensorDev, and `keras_sig`; and GPU-only PathSig.
 
 RoughPy and `signature-rs` expose only single-path APIs, so their method labels
 identify the simple Python `batch_loop` used to process the common batched
@@ -119,12 +120,16 @@ loop overhead, rather than native batched-kernel throughput. `iisignature` accep
 the batch natively, while JAX/Torch adapters use native batching or compiled
 vectorization. `log-signatures-pytorch` uses its native batched API in float32:
 eager mode on CPU and `torch.compile(mode="reduce-overhead")` on GPU, with
-compilation in warmup and CUDA synchronization in every measured call. The
-`chen-signatures` adapter skips batch sizes above one.
+compilation in warmup and CUDA synchronization in every measured call.
+`chen-signatures` is also single-path and uses the same explicit public-API
+batch-loop convention.
 
 `pathsig` uses native float32 CUDA batches without an additional compilation
 wrapper. Its log-signature benchmark uses the canonical Lyndon projection so the
 output is compact rather than the library's default full word-basis tensor.
+TensorDev instead exposes an expanded word-basis tensor logarithm, identified as
+such in its method label; its log-signature timings therefore include more output
+coordinates than compact Lyndon- or Hall-basis implementations.
 
 RoughPy's float32 increments and algebra context are prepared outside timing, but
 each measured call constructs a fresh stream so RoughPy's interval cache cannot
@@ -133,11 +138,15 @@ float32 input are prepared outside timing; its binding still performs its intern
 NaN check, input copy, basis construction, and log-signature calculation during
 each measured call.
 
-Focused configurations are provided for branched signatures and signature
-kernels:
+The three complete sweep configurations are:
+
+- `config/benchmark_sweep.yaml`: all signature-family operations
+- `config/signature_kernel_sweep.yaml`
+- `config/combined_sweep.yaml`: all operations on the kernel-safe grid
+
+Smaller focused configurations are also provided:
 
 - `config/bnrde_sweep.yaml`
-- `config/signature_kernel_sweep.yaml`
 - `config/smoke.yaml`
 
 ## Run artifacts
@@ -146,14 +155,18 @@ Each run creates `runs/benchmark_TIMESTAMP/` containing:
 
 - `results.csv`
 - `completed_tasks.txt`
+- `inputs/` with exact fBM `.npy` batches and SHA-256 sidecars
 - `benchmark_sweep.yaml`
 - `libraries_registry.yaml`
 - `metadata.json`
 - `uv.lock`
+- `git_status.txt` and `git_diff.patch` when tracked changes are present
 
 `metadata.json` records the timestamp, git commit and dirty state, Python/platform
-information, Julia and uv versions, visible GPU/driver information when available,
-and relevant backend/thread environment variables.
+information, CPU and RAM details, Julia and uv versions, full visible GPU
+configuration when available, and relevant backend/thread environment variables.
+Cached fBM inputs are reused by every matching library, operation, depth, and
+backend, including after resuming a run.
 
 The CSV contains:
 
@@ -166,6 +179,10 @@ For a batched signature calculation, `t_ms` is the latency of one call processin
 `batch_size` paths. For a signature-kernel calculation, one call produces a
 `batch_size × batch_size` kernel matrix. Do not interpret these values as
 single-path latency.
+
+`alloc_bytes` is the average net Python heap change observed by `tracemalloc`.
+It excludes native allocations, framework memory pools, and CPU/GPU device
+memory, so it must not be presented as peak operation memory.
 
 ## Adding an adapter
 

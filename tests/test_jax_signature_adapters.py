@@ -13,6 +13,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from adapters.python.run_keras_sig import KerasSigAdapter
 from adapters.python.run_signax import SignaxAdapter
+from adapters.python.run_tensordev import TensorDevAdapter
 from common.paths import make_path
 
 
@@ -104,3 +105,49 @@ def test_keras_sig_signature_matches_direct_api():
     assert got.dtype == np.float32
     assert got.shape == expected.shape
     np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_tensordev_signature_matches_direct_api():
+    """TensorDev adapter uses its native batched path-signature API."""
+    pytest.importorskip("jax")
+    tensordev = pytest.importorskip("tensordev")
+
+    adapter = TensorDevAdapter(_config("signature"))
+    path = make_path(2, 4, "linear")
+
+    got = adapter.run_signature(path, 2, 2)()
+    expected = tensordev.path_signature(adapter._path_array(path), trunc=2)
+
+    got_flat = np.asarray(tensordev.tensor_to_flat(got, start_at_level_one=True))
+    expected_flat = np.asarray(
+        tensordev.tensor_to_flat(expected, start_at_level_one=True)
+    )
+
+    assert got_flat.dtype == np.float32
+    assert got_flat.shape == expected_flat.shape
+    np.testing.assert_allclose(got_flat, expected_flat, rtol=1e-6, atol=1e-6)
+
+
+def test_tensordev_logsignature_matches_direct_api():
+    """TensorDev adapter computes its expanded tensor log-signature."""
+    pytest.importorskip("jax")
+    tensordev = pytest.importorskip("tensordev")
+
+    adapter = TensorDevAdapter(_config("logsignature"))
+    path = make_path(2, 4, "linear")
+
+    got = adapter.run_logsignature(path, 2, 2)()
+    signature = tensordev.path_signature(adapter._path_array(path), trunc=2)
+    expected = tensordev.tensor_logarithm(
+        signature[1:],
+        trunc=2,
+        output_zero_level=False,
+    )
+
+    assert len(got) == len(expected)
+    for got_level, expected_level in zip(got, expected):
+        got_level = np.asarray(got_level)
+        expected_level = np.asarray(expected_level)
+        assert got_level.dtype == np.float32
+        assert got_level.shape == expected_level.shape
+        np.testing.assert_allclose(got_level, expected_level, rtol=1e-6, atol=1e-6)

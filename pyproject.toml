@@ -42,9 +42,21 @@ stochastax = [
     "jax[cuda]",
     "stochastax",
 ]
+signax = [
+    "jax[cuda]",
+    "signax",
+]
+keras-sig = [
+    "jax[cuda]",
+    "keras_sig",
+]
 polysigkernel = [
     "jax[cuda]",
     "polysigkernel",
+]
+tensordev = [
+    "jax[cuda]",
+    "tensordev==0.0.2",
 ]
 all = [
     "chen-signatures==0.2.4",
@@ -60,6 +72,7 @@ all = [
     "signature-py",
     "stochastax",
     "signax",
+    "tensordev==0.0.2",
     "keras_sig",
     "torch>=2.9.1",
 ]

@@ -1,14 +1,14 @@
 # benchmark_sweep.yaml
-# Focused sweep: 2 dimensions, higher truncation depths
+# Complete signature-family sweep across all registered libraries.
 
 path_kind: "fbm"
 seed: 20260529
 
 # Path lengths
-Ns: [200, 400, 800, 1600]
+Ns: [256, 512, 1024]
 
 # Dimensions: low (fast, high-m friendly) vs high (stress test)
-Ds: [2, 4, 8, 12, 16, 20]
+Ds: [2, 4, 8, 16]
 
 # Depths: skip trivial cases, go deeper
 Ms: [2, 3]
@@ -16,6 +16,7 @@ Ms: [2, 3]
 operations:
     - signature
     - logsignature
+    - sigdiff
     - branchedsignature_nonplanar
     - branchedsignature_planar
 
@@ -27,7 +28,7 @@ backends:
 
 batch_size: 256
 
-repeats: 10
+repeats: 5
 
 logsig_method: "S"
 

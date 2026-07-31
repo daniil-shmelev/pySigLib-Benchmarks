@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 
 import matplotlib
-import numpy as np
 
 matplotlib.use("Agg")
 
@@ -14,9 +13,9 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from plotting import (
     _heatmap_color_scale,
-    _individual_heatmap_figsize,
     _format_heatmap_library_axis,
     _format_heatmap_param_axis,
+    _rows_for_operation,
     _series_key,
     load_results,
     make_heatmap_plot,
@@ -87,15 +86,7 @@ def test_heatmap_color_scale_avoids_zero_when_data_starts_near_point_two():
     assert ticks[0] == 0.2
 
 
-def test_individual_heatmap_figsize_is_compact_for_single_library():
-    figsize = _individual_heatmap_figsize([{
-        "matrix": np.zeros((23, 1)),
-    }])
-
-    assert figsize == (2.25, 3.69)
-
-
-def test_make_heatmap_plot_saves_combined_and_individual_png_and_pdf_files(tmp_path):
+def test_make_heatmap_plot_saves_one_operation_level_figure(tmp_path):
     csv_path = tmp_path / "results.csv"
     csv_path.write_text(
         "\n".join([
@@ -109,20 +100,16 @@ def test_make_heatmap_plot_saves_combined_and_individual_png_and_pdf_files(tmp_p
     )
     output_path = tmp_path / "plot_heatmap.png"
 
-    result_path = make_heatmap_plot(csv_path, output_path, show_titles=False)
+    result_path = make_heatmap_plot(
+        csv_path,
+        output_path,
+        show_titles=False,
+        operation="logsignature",
+    )
 
     assert result_path == output_path
     assert output_path.exists()
-    individual_files = sorted((tmp_path / "plot_heatmaps").glob("*.png"))
-    assert [path.name for path in individual_files] == [
-        "branchedsignature_planar_m-2_backend-gpu.png",
-        "logsignature_m-2_backend-gpu.png",
-    ]
-    individual_pdfs = sorted((tmp_path / "plot_heatmaps").glob("*.pdf"))
-    assert [path.name for path in individual_pdfs] == [
-        "branchedsignature_planar_m-2_backend-gpu.pdf",
-        "logsignature_m-2_backend-gpu.pdf",
-    ]
+    assert not (tmp_path / "plot_heatmaps").exists()
 
 
 def test_plot_series_keep_cpu_and_gpu_variants_distinct(tmp_path):
@@ -139,6 +126,24 @@ def test_plot_series_keep_cpu_and_gpu_variants_distinct(tmp_path):
     rows = load_results(csv_path)
 
     assert len({_series_key(row) for row in rows}) == 2
+
+
+def test_rows_for_operation_keeps_functions_separate():
+    rows = [
+        {"operation": "signature", "backend": "cpu"},
+        {"operation": "logsignature", "backend": "cpu"},
+        {"operation": "logsignature", "backend": "gpu"},
+        {"operation": "branchedsignature_nonplanar", "backend": "gpu"},
+    ]
+
+    assert _rows_for_operation(rows, "logsignature") == [
+        {"operation": "logsignature", "backend": "cpu"},
+        {"operation": "logsignature", "backend": "gpu"},
+    ]
+    assert _rows_for_operation(rows, "logsignature", "gpu") == [
+        {"operation": "logsignature", "backend": "gpu"},
+    ]
+    assert _rows_for_operation(rows, None) == rows
 
 
 def test_line_plot_includes_branched_operations(tmp_path):

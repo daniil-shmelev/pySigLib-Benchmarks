@@ -50,6 +50,21 @@ RESULT_FIELDS = [
     "alloc_bytes",
 ]
 COMPLETED_TASKS_FILE = "completed_tasks.txt"
+SKIPPED_TASKS_FILE = "skipped_tasks.csv"
+SKIPPED_TASK_FIELDS = [
+    "task_id",
+    "library",
+    "backend",
+    "operation",
+    "N",
+    "d",
+    "m",
+    "batch_size",
+    "reason",
+]
+UNSUPPORTED_ERROR_MARKERS = (
+    "CUDA branched sig: num_trees > 1024 not supported",
+)
 
 
 def load_yaml(path: Path) -> Dict[str, Any]:
@@ -109,11 +124,24 @@ def initialize_results_csv(csv_path: Path) -> None:
         os.fsync(results_file.fileno())
 
 
-def discard_uncommitted_rows(csv_path: Path, completed_tasks: set[str]) -> None:
+def initialize_skipped_tasks_csv(csv_path: Path) -> None:
+    """Create the durable record of unsupported benchmark tasks."""
+    with csv_path.open("w", newline="", encoding="utf-8") as skipped_file:
+        writer = csv.DictWriter(skipped_file, fieldnames=SKIPPED_TASK_FIELDS)
+        writer.writeheader()
+        skipped_file.flush()
+        os.fsync(skipped_file.fileno())
+
+
+def discard_uncommitted_rows(
+    csv_path: Path,
+    completed_tasks: set[str],
+    fieldnames: Sequence[str] = RESULT_FIELDS,
+) -> None:
     """Remove rows written by a task that crashed before its completion marker."""
     with csv_path.open("r", newline="", encoding="utf-8") as results_file:
         reader = csv.DictReader(results_file)
-        if reader.fieldnames != RESULT_FIELDS:
+        if reader.fieldnames != list(fieldnames):
             raise ValueError(
                 f"Cannot resume {csv_path}: results schema does not support resume"
             )
@@ -127,7 +155,7 @@ def discard_uncommitted_rows(csv_path: Path, completed_tasks: set[str]) -> None:
     with temp_path.open("w", newline="", encoding="utf-8") as results_file:
         writer = csv.DictWriter(
             results_file,
-            fieldnames=RESULT_FIELDS,
+            fieldnames=fieldnames,
             extrasaction="ignore",
         )
         writer.writeheader()
@@ -161,6 +189,48 @@ def append_task_results(
     return len(rows)
 
 
+def append_skipped_task(
+    writer: csv.DictWriter,
+    skipped_file,
+    completed_file,
+    task_id: str,
+    library_name: str,
+    backend_name: str,
+    task_config: Dict[str, Any],
+    reason: str,
+) -> None:
+    """Record an unsupported task, then commit it so resume will not retry it."""
+    writer.writerow({
+        "task_id": task_id,
+        "library": library_name,
+        "backend": backend_name,
+        "operation": task_config["operation"],
+        "N": task_config["N"],
+        "d": task_config["d"],
+        "m": task_config["m"],
+        "batch_size": task_config["batch_size"],
+        "reason": reason,
+    })
+    skipped_file.flush()
+    os.fsync(skipped_file.fileno())
+
+    completed_file.write(task_id + "\n")
+    completed_file.flush()
+    os.fsync(completed_file.fileno())
+
+
+def unsupported_adapter_reason(error: Exception) -> Optional[str]:
+    """Return a stable reason for a known deterministic capability failure."""
+    details = [str(error)]
+    if isinstance(error, subprocess.CalledProcessError):
+        details.extend([error.stdout or "", error.stderr or ""])
+    output = "\n".join(details)
+    return next(
+        (marker for marker in UNSUPPORTED_ERROR_MARKERS if marker in output),
+        None,
+    )
+
+
 def count_result_rows(csv_path: Path) -> int:
     with csv_path.open("r", newline="", encoding="utf-8") as results_file:
         return sum(1 for _ in csv.DictReader(results_file))
@@ -184,36 +254,49 @@ def _command_output(cmd: List[str]) -> Optional[str]:
 
 
 def write_run_metadata(run_dir: Path, sweep_config: Path) -> None:
-    """Save the minimum environment metadata needed to identify a paper run."""
+    """Save environment and hardware metadata needed to identify a paper run."""
     git_status = _command_output(["git", "status", "--porcelain"])
+    git_diff = _command_output(["git", "diff", "--binary", "HEAD"])
     metadata = {
         "created_at": datetime.now().astimezone().isoformat(),
         "git_commit": _command_output(["git", "rev-parse", "HEAD"]),
         "git_dirty": bool(git_status),
+        "git_status": git_status,
+        "hostname": platform.node(),
         "python": sys.version,
         "platform": platform.platform(),
         "machine": platform.machine(),
         "processor": platform.processor(),
+        "cpu_count_logical": os.cpu_count(),
+        "cpu": _command_output(["lscpu"]),
+        "memory": _command_output(["free", "-b"]),
         "sweep_config": str(sweep_config),
         "uv_version": _command_output(["uv", "--version"]),
         "julia_version": _command_output(["julia", "--version"]),
         "nvcc_version": _command_output(["nvcc", "--version"]),
         "gpu": _command_output([
             "nvidia-smi",
-            "--query-gpu=name,driver_version",
+            "--query-gpu=name,uuid,driver_version,memory.total,power.limit",
             "--format=csv,noheader",
         ]),
+        "nvidia_smi": _command_output(["nvidia-smi", "-q"]),
         "environment": {
             key: os.environ[key]
             for key in (
                 "CUDA_VISIBLE_DEVICES",
+                "CUDA_DEVICE_ORDER",
                 "CUDA_HOME",
                 "CMAKE_ARGS",
+                "JAX_ENABLE_X64",
                 "JAX_PLATFORM_NAME",
+                "JAX_PLATFORMS",
+                "KERAS_BACKEND",
                 "OMP_NUM_THREADS",
                 "MKL_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS",
                 "OPENBLAS_NUM_THREADS",
                 "TORCH_CUDA_ARCH_LIST",
+                "VECLIB_MAXIMUM_THREADS",
                 "XLA_FLAGS",
             )
             if key in os.environ
@@ -223,6 +306,17 @@ def write_run_metadata(run_dir: Path, sweep_config: Path) -> None:
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+    if git_status:
+        (run_dir / "git_status.txt").write_text(
+            git_status + "\n",
+            encoding="utf-8",
+        )
+    if git_diff:
+        (run_dir / "git_diff.patch").write_text(
+            git_diff + "\n",
+            encoding="utf-8",
+        )
 
     lockfile = REPO_ROOT / "uv.lock"
     if lockfile.exists():
@@ -414,6 +508,8 @@ def run_python_adapter(
         )
 
     except subprocess.CalledProcessError as e:
+        if unsupported_adapter_reason(e) is not None:
+            raise
         _progress_write(f"Error running {library_name}:", file=sys.stderr)
         _progress_write(f"  command: {shlex.join(e.cmd)}", file=sys.stderr)
         if e.stdout:
@@ -561,14 +657,24 @@ def run_orchestrator(
 
     csv_path = run_dir / "results.csv"
     completed_path = run_dir / COMPLETED_TASKS_FILE
+    skipped_path = run_dir / SKIPPED_TASKS_FILE
     if resume_dir is None:
         initialize_results_csv(csv_path)
+        initialize_skipped_tasks_csv(skipped_path)
         completed_tasks: set[str] = set()
     else:
         if not csv_path.exists():
             raise FileNotFoundError(f"Results file not found: {csv_path}")
         completed_tasks = load_completed_tasks(completed_path)
         discard_uncommitted_rows(csv_path, completed_tasks)
+        if skipped_path.exists():
+            discard_uncommitted_rows(
+                skipped_path,
+                completed_tasks,
+                SKIPPED_TASK_FIELDS,
+            )
+        else:
+            initialize_skipped_tasks_csv(skipped_path)
 
     print("\n" + "=" * 60)
     print("Signature Benchmark Orchestrator")
@@ -602,6 +708,7 @@ def run_orchestrator(
 
     with (
         csv_path.open("a", newline="", encoding="utf-8") as results_file,
+        skipped_path.open("a", newline="", encoding="utf-8") as skipped_file,
         completed_path.open("a", encoding="utf-8") as completed_file,
         tqdm(
             total=total_tasks,
@@ -613,6 +720,11 @@ def run_orchestrator(
         writer = csv.DictWriter(
             results_file,
             fieldnames=RESULT_FIELDS,
+            extrasaction="ignore",
+        )
+        skipped_writer = csv.DictWriter(
+            skipped_file,
+            fieldnames=SKIPPED_TASK_FIELDS,
             extrasaction="ignore",
         )
         for library_name, library_config in libraries.items():
@@ -675,6 +787,10 @@ def run_orchestrator(
                                     backend_name,
                                     task_config,
                                 )
+                                if path_kind.lower() == "fbm":
+                                    task_config["input_cache_dir"] = str(
+                                        run_dir / "inputs"
+                                    )
                                 if task_id in completed_tasks:
                                     progress.set_postfix_str("skipped: complete", refresh=True)
                                     progress.update(1)
@@ -720,6 +836,30 @@ def run_orchestrator(
                                     progress.set_postfix_str("done", refresh=True)
 
                                 except Exception as e:
+                                    unsupported_reason = unsupported_adapter_reason(e)
+                                    if unsupported_reason is not None:
+                                        append_skipped_task(
+                                            skipped_writer,
+                                            skipped_file,
+                                            completed_file,
+                                            task_id,
+                                            library_name,
+                                            backend_name,
+                                            task_config,
+                                            unsupported_reason,
+                                        )
+                                        completed_tasks.add(task_id)
+                                        progress.set_postfix_str(
+                                            "skipped: unsupported",
+                                            refresh=True,
+                                        )
+                                        _progress_write(
+                                            f"Skipped {task_label}: "
+                                            f"{unsupported_reason}",
+                                            file=sys.stderr,
+                                        )
+                                        continue
+
                                     progress.set_postfix_str("failed", refresh=True)
                                     _progress_write(
                                         f"Failed {task_label}: {e}",
@@ -736,6 +876,9 @@ def run_orchestrator(
     print(f"Benchmark complete!")
     print(f"Results written to: {csv_path}")
     print(f"Total benchmarks: {count_result_rows(csv_path)}")
+    skipped_count = count_result_rows(skipped_path)
+    if skipped_count:
+        print(f"Unsupported tasks: {skipped_count} (see {skipped_path})")
     print("=" * 60)
 
     return csv_path

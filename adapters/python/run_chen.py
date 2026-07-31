@@ -52,17 +52,23 @@ class ChenSignaturesAdapter(BenchmarkAdapter):
         import chen
         self.chen = chen
 
+    @staticmethod
+    def _path_batch(path: np.ndarray) -> np.ndarray:
+        """Return contiguous float32 paths with an explicit batch axis."""
+        paths = np.ascontiguousarray(path, dtype=np.float32)
+        if paths.ndim == 2:
+            paths = paths[np.newaxis, ...]
+        return paths
+
     def run_signature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
         Prepare signature computation kernel.
 
         Returns a closure that performs only the kernel (no setup).
         """
-        # Setup phase (untimed): ensure path is contiguous
-        path = np.ascontiguousarray(path, dtype=np.float32)
+        paths = self._path_batch(path)
 
-        # Return kernel closure
-        return lambda: self.chen.sig(path, m)
+        return lambda: [self.chen.sig(sample, m) for sample in paths]
 
     def run_logsignature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
@@ -74,12 +80,11 @@ class ChenSignaturesAdapter(BenchmarkAdapter):
         if not (hasattr(self.chen, "logsig") and hasattr(self.chen, "prepare_logsig")):
             return None
 
-        # Setup phase (untimed): prepare basis and ensure path is contiguous
-        path = np.ascontiguousarray(path, dtype=np.float32)
+        # Setup phase (untimed): prepare basis and contiguous paths.
+        paths = self._path_batch(path)
         basis = self.chen.prepare_logsig(d, m)
 
-        # Return kernel closure
-        return lambda: self.chen.logsig(path, basis)
+        return lambda: [self.chen.logsig(sample, basis) for sample in paths]
 
     def run_sigdiff(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
@@ -94,40 +99,33 @@ class ChenSignaturesAdapter(BenchmarkAdapter):
         except ImportError:
             return None
 
-        # Setup phase (untimed): prepare path as numpy array
-        path_np = np.ascontiguousarray(path, dtype=np.float32)
+        paths = self._path_batch(path)
 
-        # Return kernel closure that converts to torch, computes sig, and backprop
+        # Rebuild the autograd graph for every repetition.
         def kernel():
-            path_t = torch.tensor(path_np, dtype=torch.float32, requires_grad=True)
-            sig = sig_torch(path_t, m)
-            loss = sig.sum()
+            path_t = torch.tensor(paths, dtype=torch.float32, requires_grad=True)
+            loss = sum(sig_torch(sample, m).sum() for sample in path_t)
             loss.backward()
 
         return kernel
 
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
-        if self.batch_size > 1:
-            # The installed Python wrapper only exposes single-path ChenSignatures.
-            # Avoid benchmarking a Python loop as a stand-in for native batching.
-            return None
-
         # Generate path
         path = self.make_path_input()
 
         # Select operation
         if self.operation == "signature":
             kernel = self.run_signature(path, self.d, self.m)
-            method = "sig"
+            method = "sig(batch_loop)"
             path_type = "ndarray"
         elif self.operation == "logsignature":
             kernel = self.run_logsignature(path, self.d, self.m)
-            method = "logsig(prepared)"
+            method = "logsig(prepared,batch_loop)"
             path_type = "ndarray"
         elif self.operation == "sigdiff":
             kernel = self.run_sigdiff(path, self.d, self.m)
-            method = "sigdiff"
+            method = "sigdiff(batch_loop)"
             path_type = "torch"
         else:
             # Operation not supported

@@ -1,5 +1,6 @@
 """Unit tests for path generation utilities"""
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -135,8 +136,8 @@ class TestPathGeneration:
         assert path_linear.flags['C_CONTIGUOUS']
         assert path_sin.flags['C_CONTIGUOUS']
 
-    def test_seeded_fbm_inputs_match_across_adapters(self):
-        """Logical inputs are reproducible but X and Y remain distinct."""
+    def test_seeded_fbm_inputs_are_saved_and_reused(self, tmp_path):
+        """Logical inputs are durable, reproducible, and checksummed."""
         config = {
             "N": 16,
             "d": 2,
@@ -146,6 +147,7 @@ class TestPathGeneration:
             "repeats": 2,
             "batch_size": 2,
             "seed": 1234,
+            "input_cache_dir": str(tmp_path),
         }
         first = BenchmarkAdapter(config)
         second = BenchmarkAdapter(config)
@@ -158,6 +160,17 @@ class TestPathGeneration:
         np.testing.assert_array_equal(first_x, second_x)
         np.testing.assert_array_equal(first_y, second_y)
         assert not np.array_equal(first_x, first_y)
+
+        cache_files = sorted(tmp_path.glob("*.npy"))
+        checksum_files = sorted(tmp_path.glob("*.npy.sha256"))
+        assert len(cache_files) == 2
+        assert len(checksum_files) == 2
+        for cache_path in cache_files:
+            digest = hashlib.sha256(cache_path.read_bytes()).hexdigest()
+            checksum = cache_path.with_suffix(".npy.sha256").read_text(
+                encoding="utf-8"
+            )
+            assert checksum == f"{digest}  {cache_path.name}\n"
 
     def test_timing_loop_retains_raw_samples(self):
         adapter = BenchmarkAdapter({

@@ -480,6 +480,18 @@ wheels = [
 ]
 
 [[package]]
+name = "llvmlite"
+version = "0.48.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/a0/acc8ffcd5bdc63df0097e22c719bfcd61b604358343089313a8aebbb24ab/llvmlite-0.48.0.tar.gz", hash = "sha256:543b19f9ef8f3c7c60d1468191e4ee1b1537bf9f8a3d56f64c0ddd98de92edd2", size = 184016, upload-time = "2026-07-02T20:20:05.308Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/92/a2/28696a9e61e245d1a79816d29d106692a90a2b6e7d78c98b326db70827af/llvmlite-0.48.0-cp312-cp312-macosx_12_0_arm64.whl", hash = "sha256:d66c3beb4209087ddd4cf4ed2a0856b6887e6a913bdcf1aacfec9851cf2cba4e", size = 40480651, upload-time = "2026-07-01T18:41:35.694Z" },
+    { url = "https://files.pythonhosted.org/packages/80/f2/72409351db66d0a317ec5087e076f31fb7b773a640db8a90ce6b5cac9edd/llvmlite-0.48.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:416fa4c2c66c2c6dc6d0a402648c19206e548efa0aa1eff01ad5cdad0af8217d", size = 59890118, upload-time = "2026-07-01T18:41:44.886Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/27/5ae2f3722606360480707adb47f001ad89df8251d06b14ee80336e660b66/llvmlite-0.48.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f5e5a5131045b72345c71062ea1a91910dde913792b6c9b28ebb2c1c0a712e98", size = 58343459, upload-time = "2026-07-01T18:41:40.306Z" },
+    { url = "https://files.pythonhosted.org/packages/16/78/d824ffff7521cd140dc2006e44ce2bc82e64b48d1b32e90e956308c85a74/llvmlite-0.48.0-cp312-cp312-win_amd64.whl", hash = "sha256:d45c7541a80934ec6d8ab0defe67439494ecd2193cbf852a44ba827808976ac1", size = 41865022, upload-time = "2026-07-01T18:41:48.663Z" },
+]
+
+[[package]]
 name = "lyndon-py"
 version = "0.1.0"
 source = { git = "https://github.com/ChosunOne/signature-rs.git?subdirectory=lyndon-py&rev=671b0fba16f1c542e76910c2825a9e8b185d3a93#671b0fba16f1c542e76910c2825a9e8b185d3a93" }
@@ -617,6 +629,22 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/95/97/51359c77527d45943fe7a94d00a3843b81162e6c4244b3579fe8fc54cb9c/ninja-1.13.0-py3-none-win32.whl", hash = "sha256:8cfbb80b4a53456ae8a39f90ae3d7a2129f45ea164f43fadfa15dc38c4aef1c9", size = 267201, upload-time = "2025-08-11T15:10:15.158Z" },
     { url = "https://files.pythonhosted.org/packages/29/45/c0adfbfb0b5895aa18cec400c535b4f7ff3e52536e0403602fc1a23f7de9/ninja-1.13.0-py3-none-win_amd64.whl", hash = "sha256:fb8ee8719f8af47fed145cced4a85f0755dd55d45b2bddaf7431fa89803c5f3e", size = 309975, upload-time = "2025-08-11T15:10:16.697Z" },
     { url = "https://files.pythonhosted.org/packages/df/93/a7b983643d1253bb223234b5b226e69de6cda02b76cdca7770f684b795f5/ninja-1.13.0-py3-none-win_arm64.whl", hash = "sha256:3c0b40b1f0bba764644385319028650087b4c1b18cdfa6f45cb39a3669b81aa9", size = 290806, upload-time = "2025-08-11T15:10:18.018Z" },
+]
+
+[[package]]
+name = "numba"
+version = "0.66.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "llvmlite" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ae/a0/570e3dc53e5602b49108f62a13e529f1eec8bfc7ef37d49c825924dcf546/numba-0.66.0.tar.gz", hash = "sha256:b900e63a0e26c05ea9a6d5a3a5a0a177cb64c5011887bf43edb8c3ed2c38d363", size = 2806181, upload-time = "2026-07-01T23:12:46.36Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/62/a3/70deb7f88461c1cd5d16aa990c2380604102661a427667b8950dcdccc27f/numba-0.66.0-cp312-cp312-macosx_12_0_arm64.whl", hash = "sha256:53ca5900b7cab15109796030113a6b28576bae5ad7bb507ad6dd1360ddd81ba4", size = 2727264, upload-time = "2026-07-01T23:12:18.669Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/55/25c319845e9a4e08f16611ddbda56a192eb7b6ed13e1a2bff2da272ffb97/numba-0.66.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:0999e3ee1b18c48e1fb51d11af35ef59852c7f4f50569c9550c25faef0616ad1", size = 3866252, upload-time = "2026-07-01T23:12:20.429Z" },
+    { url = "https://files.pythonhosted.org/packages/71/ef/a82d6fd6bf1b0fe461651e924d3647eeec9ac17f8eee4896264bf7480930/numba-0.66.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:efe0d2d5099790df945e0cb6e1b3104bd965d7bbfac50d62f1d5d1d6ade0825d", size = 3566974, upload-time = "2026-07-01T23:12:22.116Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/eb/9e6171e378822ab191c7abcfd3d8cfc8644516f6c7834c22e210e4acc070/numba-0.66.0-cp312-cp312-win_amd64.whl", hash = "sha256:b075a4e7ebc43dc6294f223e2821659656209fd5e0ce53245877c23d66d6e1a9", size = 2797403, upload-time = "2026-07-01T23:12:23.724Z" },
 ]
 
 [[package]]
@@ -1214,6 +1242,7 @@ all = [
     { name = "signature-py" },
     { name = "signax" },
     { name = "stochastax" },
+    { name = "tensordev" },
     { name = "torch" },
 ]
 chen-signatures = [
@@ -1223,6 +1252,10 @@ chen-signatures = [
 iisignature = [
     { name = "iisignature" },
     { name = "numpy" },
+]
+keras-sig = [
+    { name = "jax", extra = ["cuda"] },
+    { name = "keras-sig" },
 ]
 log-signatures-pytorch = [
     { name = "torch" },
@@ -1247,9 +1280,17 @@ roughpy = [
 signature-rs = [
     { name = "signature-py" },
 ]
+signax = [
+    { name = "jax", extra = ["cuda"] },
+    { name = "signax" },
+]
 stochastax = [
     { name = "jax", extra = ["cuda"] },
     { name = "stochastax" },
+]
+tensordev = [
+    { name = "jax", extra = ["cuda"] },
+    { name = "tensordev" },
 ]
 
 [package.metadata]
@@ -1262,9 +1303,13 @@ requires-dist = [
     { name = "fbm", marker = "extra == 'all'", specifier = ">=0.3.0" },
     { name = "iisignature", marker = "extra == 'iisignature'" },
     { name = "jax", extras = ["cuda"], marker = "extra == 'all'" },
+    { name = "jax", extras = ["cuda"], marker = "extra == 'keras-sig'" },
     { name = "jax", extras = ["cuda"], marker = "extra == 'polysigkernel'" },
+    { name = "jax", extras = ["cuda"], marker = "extra == 'signax'" },
     { name = "jax", extras = ["cuda"], marker = "extra == 'stochastax'" },
+    { name = "jax", extras = ["cuda"], marker = "extra == 'tensordev'" },
     { name = "keras-sig", marker = "extra == 'all'", git = "https://github.com/remigenet/keras_sig.git?rev=32367ad019ede3c31c2b6f3a1197090696d4a8eb" },
+    { name = "keras-sig", marker = "extra == 'keras-sig'", git = "https://github.com/remigenet/keras_sig.git?rev=32367ad019ede3c31c2b6f3a1197090696d4a8eb" },
     { name = "matplotlib", specifier = ">=3.9.4" },
     { name = "ninja", marker = "extra == 'all'", specifier = ">=1.11" },
     { name = "ninja", marker = "extra == 'pathsig'", specifier = ">=1.11" },
@@ -1283,15 +1328,18 @@ requires-dist = [
     { name = "signature-py", marker = "extra == 'all'", git = "https://github.com/ChosunOne/signature-rs.git?subdirectory=signature-py&rev=671b0fba16f1c542e76910c2825a9e8b185d3a93" },
     { name = "signature-py", marker = "extra == 'signature-rs'", git = "https://github.com/ChosunOne/signature-rs.git?subdirectory=signature-py&rev=671b0fba16f1c542e76910c2825a9e8b185d3a93" },
     { name = "signax", marker = "extra == 'all'", git = "https://github.com/anh-tong/signax?rev=4961f361b60d293f4e7679dba028b93dead89c39" },
+    { name = "signax", marker = "extra == 'signax'", git = "https://github.com/anh-tong/signax?rev=4961f361b60d293f4e7679dba028b93dead89c39" },
     { name = "stochastax", marker = "extra == 'all'", git = "https://github.com/luke-a-thompson/Stochastax.git?rev=09c9612e9352bb05a0a92a30e2bc391cdd2c78e1" },
     { name = "stochastax", marker = "extra == 'stochastax'", git = "https://github.com/luke-a-thompson/Stochastax.git?rev=09c9612e9352bb05a0a92a30e2bc391cdd2c78e1" },
+    { name = "tensordev", marker = "extra == 'all'", specifier = "==0.0.2" },
+    { name = "tensordev", marker = "extra == 'tensordev'", specifier = "==0.0.2" },
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.9.1" },
     { name = "torch", marker = "extra == 'chen-signatures'" },
     { name = "torch", marker = "extra == 'log-signatures-pytorch'", specifier = ">=2.9.1" },
     { name = "torch", marker = "extra == 'pathsig'", specifier = ">=2.4" },
     { name = "tqdm" },
 ]
-provides-extras = ["chen-signatures", "iisignature", "roughpy", "signature-rs", "log-signatures-pytorch", "pathsig", "pysiglib", "stochastax", "polysigkernel", "all"]
+provides-extras = ["chen-signatures", "iisignature", "roughpy", "signature-rs", "log-signatures-pytorch", "pathsig", "pysiglib", "stochastax", "signax", "keras-sig", "polysigkernel", "tensordev", "all"]
 
 [[package]]
 name = "signature-py"
@@ -1343,6 +1391,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921, upload-time = "2025-04-27T18:05:01.611Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5", size = 6299353, upload-time = "2025-04-27T18:04:59.103Z" },
+]
+
+[[package]]
+name = "tensordev"
+version = "0.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jax" },
+    { name = "jaxlib" },
+    { name = "numba" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/94/97/6f9118ebb295fc2b61cd2aa157fb956409cc926df6ac167271faab7ec3fa/tensordev-0.0.2.tar.gz", hash = "sha256:232ce132b0e12b55c64768dc6d6c58e1f7041d9902089d5cb71870d6602c80f4", size = 144882, upload-time = "2026-05-20T05:53:22.204Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/75/18/b1d782a70d6c92260472c1336e8b8feb46343a2a63183c9fbb231a80a33a/tensordev-0.0.2-py3-none-any.whl", hash = "sha256:816dcf187c5eb502ca19b0f0a51b26cdbb15246ef8a26853e6578c920812e553", size = 164710, upload-time = "2026-05-20T05:53:20.57Z" },
 ]
 
 [[package]]

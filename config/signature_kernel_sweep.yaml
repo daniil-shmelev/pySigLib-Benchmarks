@@ -1,5 +1,5 @@
 # signature_kernel_sweep.yaml
-# Focused sweep for pairwise signature-kernel matrix benchmarks.
+# Complete pairwise signature-kernel sweep across all registered libraries.
 
 path_kind: "fbm"
 seed: 20260529
@@ -20,7 +20,7 @@ operations:
 # Backend labels defined per library in libraries_registry.yaml.
 # Use [cpu], [gpu], or [cpu, gpu] to choose the experiment scope.
 backends:
-    # - cpu
+    - cpu
     - gpu
 
 # Paths in X and Y per timed kernel-matrix call, producing batch_size x batch_size outputs.

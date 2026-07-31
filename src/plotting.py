@@ -56,15 +56,13 @@ def _series_key(row: Dict[str, Any]) -> SeriesKey:
     )
 
 
-def _series_label(key: SeriesKey) -> str:
-    """Return a compact, unambiguous plot label for an implementation variant."""
-    library, backend, method, path_type, batch_size = key
+def _series_label(key: SeriesKey, *, include_backend: bool = True) -> str:
+    """Return a readable label while identity details remain in the series key."""
+    library, backend, _, _, _ = key
     label = library
-    if backend:
+    if include_backend and backend:
         label += f" [{backend}]"
-    details = [value for value in (method, path_type) if value]
-    details.append(f"batch={batch_size}")
-    return f"{label} ({', '.join(details)})"
+    return label
 
 
 def _ordered_operations(rows: List[Dict[str, Any]]) -> List[str]:
@@ -79,6 +77,22 @@ def _ordered_operations(rows: List[Dict[str, Any]]) -> List[str]:
         "signaturekernel",
     ]
     return [op for op in preferred if op in observed] + sorted(observed - set(preferred))
+
+
+def _rows_for_operation(
+    rows: List[Dict[str, Any]],
+    operation: Optional[str],
+    backend: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return rows for the requested operation and backend selection."""
+    return [
+        row
+        for row in rows
+        if (
+            (operation is None or row["operation"] == operation)
+            and (backend is None or row.get("backend", "") == backend)
+        )
+    ]
 
 
 def get_time(
@@ -287,73 +301,12 @@ def _heatmap_color_scale(values: List[float]) -> Tuple[float, float, List[float]
     return vmin, vmax, [float(tick) for tick in ticks]
 
 
-def _individual_heatmap_figsize(panels: List[Dict[str, Any]]) -> Tuple[float, float]:
-    """Pick a uniform, compact size for standalone heatmap panels."""
-    if not panels:
-        return 2.25, 2.4
-
-    max_rows = max(panel["matrix"].shape[0] for panel in panels)
-    max_cols = max(panel["matrix"].shape[1] for panel in panels)
-
-    width = min(max(2.25, 1.75 + 0.25 * max_cols), 2.6)
-    height = min(max(2.4, 0.13 * max_rows + 0.7), 4.2)
-    return round(width, 2), round(height, 2)
-
-
-def _save_individual_heatmap(
-    panel: Dict[str, Any],
-    output_path: Path,
-    vmin: float,
-    vmax: float,
-    colorbar_ticks: List[float],
-    annotation_threshold: float,
-    include_colorbar: bool,
-    figsize: Tuple[float, float],
-) -> None:
-    """Save a single heatmap panel using the shared color scale."""
-    fig = plt.figure(figsize=figsize, constrained_layout=False)
-    grid = fig.add_gridspec(
-        1,
-        2,
-        width_ratios=[1.0, 0.08],
-        left=0.23,
-        right=0.76,
-        bottom=0.08,
-        top=0.98,
-        wspace=0.16,
-    )
-    ax = fig.add_subplot(grid[0, 0])
-    cax = fig.add_subplot(grid[0, 1])
-
-    im = ax.imshow(
-        panel["matrix"],
-        aspect="auto",
-        cmap="viridis",
-        interpolation="nearest",
-        vmin=vmin,
-        vmax=vmax,
-    )
-    _configure_heatmap_axes(ax, panel, show_titles=False)
-    ax.tick_params(axis="both", labelsize=7, length=3)
-    ax.xaxis.label.set_size(8)
-    ax.yaxis.label.set_size(8)
-    if include_colorbar:
-        cbar = fig.colorbar(im, cax=cax, ticks=colorbar_ticks or None)
-        cbar.set_label("Runtime (ms)")
-        cbar.ax.tick_params(labelsize=7, length=3)
-        cbar.ax.yaxis.label.set_size(8)
-    else:
-        cax.set_visible(False)
-    _annotate_heatmap(ax, panel["matrix"], annotation_threshold, fontsize=6)
-    fig.savefig(output_path, dpi=300)
-    fig.savefig(output_path.with_suffix(".pdf"))
-    plt.close(fig)
-
-
 def make_line_plot(
     csv_path: Path,
     output_path: Optional[Path] = None,
-    config: Optional[Dict[str, Any]] = None
+    config: Optional[Dict[str, Any]] = None,
+    operation: Optional[str] = None,
+    backend: Optional[str] = None,
 ) -> Path:
     """
     Generate 3x3 line plot comparison grid (original visualization).
@@ -362,11 +315,13 @@ def make_line_plot(
         csv_path: Path to results CSV
         output_path: Optional output path (defaults to same dir as CSV)
         config: Optional configuration dict with sweep parameters
+        operation: Optional operation to plot in isolation
+        backend: Optional backend to plot in isolation
 
     Returns:
         Path to saved plot
     """
-    rows = load_results(csv_path)
+    rows = _rows_for_operation(load_results(csv_path), operation, backend)
 
     if not rows:
         raise ValueError("No benchmark results found in CSV")
@@ -399,7 +354,7 @@ def make_line_plot(
     fig, axes = plt.subplots(
         3,
         len(op_order),
-        figsize=(5 * len(op_order), 12),
+        figsize=(8 * len(op_order), 12),
         sharey="col",
         squeeze=False,
     )
@@ -451,7 +406,10 @@ def make_line_plot(
                         xs_effective,
                         ys,
                         marker="o",
-                        label=_series_label(series_key),
+                        label=_series_label(
+                            series_key,
+                            include_backend=backend is None,
+                        ),
                     )
                     plotted_any = True
 
@@ -470,7 +428,8 @@ def make_line_plot(
             ax.grid(True, which="both", linestyle="--", alpha=0.3)
 
             # Title with fixed parameters
-            title = f"{op}, vary {vary}"
+            scope = op if backend is None else f"{op} [{backend}]"
+            title = f"{scope}, vary {vary}"
             if vary == "N":
                 title += f" (d={d_fixed_for_N}, m={m_fixed_for_N})"
             elif vary == "d":
@@ -483,7 +442,13 @@ def make_line_plot(
             if row_idx == 0:
                 handles, labels = ax.get_legend_handles_labels()
                 if handles:
-                    ax.legend(handles, labels, fontsize=8)
+                    ax.legend(
+                        handles,
+                        labels,
+                        fontsize=8,
+                        loc="upper left",
+                        bbox_to_anchor=(1.02, 1.0),
+                    )
 
     fig.tight_layout()
 
@@ -491,7 +456,7 @@ def make_line_plot(
     if output_path is None:
         output_path = csv_path.parent / "plot_line.png"
 
-    fig.savefig(output_path, dpi=300)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Line plot saved to: {output_path}")
     plt.close(fig)
 
@@ -503,6 +468,8 @@ def make_heatmap_plot(
     output_path: Optional[Path] = None,
     config: Optional[Dict[str, Any]] = None,
     show_titles: bool = True,
+    operation: Optional[str] = None,
+    backend: Optional[str] = None,
 ) -> Path:
     """
     Generate heatmap showing performance across all parameter combinations.
@@ -511,12 +478,14 @@ def make_heatmap_plot(
         csv_path: Path to results CSV
         output_path: Optional output path (defaults to same dir as CSV)
         config: Optional configuration dict
-        show_titles: Whether to show titles on combined and individual heatmaps
+        show_titles: Whether to show subplot titles
+        operation: Optional operation to plot in isolation
+        backend: Optional backend to plot in isolation
 
     Returns:
         Path to saved plot
     """
-    rows = load_results(csv_path)
+    rows = _rows_for_operation(load_results(csv_path), operation, backend)
 
     if not rows:
         raise ValueError("No benchmark results found in CSV")
@@ -546,7 +515,10 @@ def make_heatmap_plot(
                     continue
 
                 series_keys = sorted(set(_series_key(r) for r in op_rows))
-                libraries = [_series_label(key) for key in series_keys]
+                libraries = [
+                    _series_label(key, include_backend=False)
+                    for key in series_keys
+                ]
                 params = sorted(set((r["N"], r["d"]) for r in op_rows))
                 param_labels, param_ylabel, fixed_params_title, show_param_axis = (
                     _format_heatmap_param_axis(params)
@@ -601,10 +573,17 @@ def make_heatmap_plot(
     num_ops = len(operations)
     num_depths = len(depths)
     num_backends = len(backends)
+    max_libraries = max(
+        (len(panel["libraries"]) for panel in panels),
+        default=1,
+    )
     fig, axes = plt.subplots(
         num_depths * num_backends,
         num_ops,
-        figsize=(7 * num_ops, 4.5 * num_depths * num_backends),
+        figsize=(
+            max(8.0, 0.9 * max_libraries) * num_ops,
+            5.5 * num_depths * num_backends,
+        ),
         squeeze=False,
         constrained_layout=True,
     )
@@ -642,36 +621,8 @@ def make_heatmap_plot(
     if output_path is None:
         output_path = csv_path.parent / "plot_heatmap.png"
 
-    individual_dir = output_path.parent / "plot_heatmaps"
-    individual_dir.mkdir(parents=True, exist_ok=True)
-    colorbar_panel = (
-        max(panels, key=lambda panel: (panel["axis_row"], panel["op_idx"]))
-        if panels
-        else None
-    )
-    individual_figsize = _individual_heatmap_figsize(panels)
-    for panel in panels:
-        filename_parts = [
-            _safe_filename_part(panel["operation"]),
-            f"m-{_safe_filename_part(panel['m'])}",
-        ]
-        if panel["backend"]:
-            filename_parts.append(f"backend-{_safe_filename_part(panel['backend'])}")
-        filename = "_".join(filename_parts) + ".png"
-        _save_individual_heatmap(
-            panel,
-            individual_dir / filename,
-            vmin,
-            vmax,
-            colorbar_ticks,
-            annotation_threshold,
-            panel is colorbar_panel,
-            individual_figsize,
-        )
-
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Heatmap plot saved to: {output_path}")
-    print(f"Individual heatmaps saved to: {individual_dir}")
     plt.close(fig)
 
     return output_path
@@ -681,7 +632,9 @@ def make_speedup_plot(
     csv_path: Path,
     output_path: Optional[Path] = None,
     config: Optional[Dict[str, Any]] = None,
-    baseline: str = "slowest"
+    baseline: str = "slowest",
+    operation: Optional[str] = None,
+    backend: Optional[str] = None,
 ) -> Path:
     """
     Generate speedup plot showing relative performance (same layout as line plot).
@@ -691,11 +644,13 @@ def make_speedup_plot(
         output_path: Optional output path
         config: Optional configuration dict
         baseline: Baseline for speedup calculation ("slowest", "fastest", or library name)
+        operation: Optional operation to plot in isolation
+        backend: Optional backend to plot in isolation
 
     Returns:
         Path to saved plot
     """
-    rows = load_results(csv_path)
+    rows = _rows_for_operation(load_results(csv_path), operation, backend)
 
     if not rows:
         raise ValueError("No benchmark results found in CSV")
@@ -785,7 +740,13 @@ def make_speedup_plot(
                         matching_keys = [
                             key
                             for key in times
-                            if baseline in (key[0], _series_label(key))
+                            if baseline in (
+                                key[0],
+                                _series_label(
+                                    key,
+                                    include_backend=backend is None,
+                                ),
+                            )
                         ]
                         baseline_time = (
                             times[matching_keys[0]]
@@ -804,7 +765,10 @@ def make_speedup_plot(
                         xs_effective,
                         speedups,
                         marker="o",
-                        label=_series_label(series_key),
+                        label=_series_label(
+                            series_key,
+                            include_backend=backend is None,
+                        ),
                     )
                     plotted_any = True
 
@@ -824,7 +788,8 @@ def make_speedup_plot(
             ax.grid(True, which="both", linestyle="--", alpha=0.3)
 
             # Title
-            title = f"{op}, vary {vary}"
+            scope = op if backend is None else f"{op} [{backend}]"
+            title = f"{scope}, vary {vary}"
             if vary == "N":
                 title += f" (d={d_fixed_for_N}, m={m_fixed_for_N})"
             elif vary == "d":
@@ -837,7 +802,13 @@ def make_speedup_plot(
             if row_idx == 0:
                 handles, labels = ax.get_legend_handles_labels()
                 if handles:
-                    ax.legend(handles, labels, fontsize=8)
+                    ax.legend(
+                        handles,
+                        labels,
+                        fontsize=8,
+                        loc="upper left",
+                        bbox_to_anchor=(1.02, 1.0),
+                    )
 
     fig.tight_layout()
 
@@ -845,7 +816,7 @@ def make_speedup_plot(
     if output_path is None:
         output_path = csv_path.parent / f"plot_speedup_{baseline}.png"
 
-    fig.savefig(output_path, dpi=300)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Speedup plot saved to: {output_path}")
     plt.close(fig)
 
@@ -855,7 +826,9 @@ def make_speedup_plot(
 def make_profile_plot(
     csv_path: Path,
     output_path: Optional[Path] = None,
-    config: Optional[Dict[str, Any]] = None
+    config: Optional[Dict[str, Any]] = None,
+    operation: Optional[str] = None,
+    backend: Optional[str] = None,
 ) -> Path:
     """
     Generate performance profile plot showing how often each library is competitive.
@@ -864,11 +837,13 @@ def make_profile_plot(
         csv_path: Path to results CSV
         output_path: Optional output path
         config: Optional configuration dict
+        operation: Optional operation to plot in isolation
+        backend: Optional backend to plot in isolation
 
     Returns:
         Path to saved plot
     """
-    rows = load_results(csv_path)
+    rows = _rows_for_operation(load_results(csv_path), operation, backend)
 
     if not rows:
         raise ValueError("No benchmark results found in CSV")
@@ -936,15 +911,23 @@ def make_profile_plot(
                 y_values,
                 marker="o",
                 markersize=4,
-                label=_series_label(series_key),
+                label=_series_label(
+                    series_key,
+                    include_backend=backend is None,
+                ),
             )
 
         ax.set_xlabel("Performance ratio (time / best_time)")
         ax.set_ylabel("Fraction of benchmarks")
-        ax.set_title(f"{operation} - Performance Profile")
+        scope = operation if backend is None else f"{operation} [{backend}]"
+        ax.set_title(f"{scope} - Performance Profile")
         ax.set_xlim(left=1.0)
         ax.grid(True, alpha=0.3)
-        ax.legend()
+        ax.legend(
+            fontsize=8,
+            loc="upper left",
+            bbox_to_anchor=(1.02, 1.0),
+        )
 
         # Add vertical line at ratio=2 (2x slower than best)
         ax.axvline(x=2.0, color="gray", linestyle="--", alpha=0.5, linewidth=1)
@@ -955,7 +938,7 @@ def make_profile_plot(
     if output_path is None:
         output_path = csv_path.parent / "plot_profile.png"
 
-    fig.savefig(output_path, dpi=300)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Performance profile plot saved to: {output_path}")
     plt.close(fig)
 
@@ -965,7 +948,9 @@ def make_profile_plot(
 def make_box_plot(
     csv_path: Path,
     output_path: Optional[Path] = None,
-    config: Optional[Dict[str, Any]] = None
+    config: Optional[Dict[str, Any]] = None,
+    operation: Optional[str] = None,
+    backend: Optional[str] = None,
 ) -> Path:
     """
     Generate box plots showing distribution of performance across all benchmarks.
@@ -974,11 +959,13 @@ def make_box_plot(
         csv_path: Path to results CSV
         output_path: Optional output path
         config: Optional configuration dict
+        operation: Optional operation to plot in isolation
+        backend: Optional backend to plot in isolation
 
     Returns:
         Path to saved plot
     """
-    rows = load_results(csv_path)
+    rows = _rows_for_operation(load_results(csv_path), operation, backend)
 
     if not rows:
         raise ValueError("No benchmark results found in CSV")
@@ -988,7 +975,12 @@ def make_box_plot(
 
     # Create subplots for each operation
     num_ops = len(operations)
-    fig, axes = plt.subplots(1, num_ops, figsize=(6 * num_ops, 6))
+    width_per_operation = max(8.0, 0.75 * len(series_keys))
+    fig, axes = plt.subplots(
+        1,
+        num_ops,
+        figsize=(width_per_operation * num_ops, 7),
+    )
     if num_ops == 1:
         axes = [axes]
 
@@ -1014,7 +1006,10 @@ def make_box_plot(
             if data_by_lib[series_key]
         ]
         plot_labels = [
-            _series_label(series_key)
+            _series_label(
+                series_key,
+                include_backend=backend is None,
+            )
             for series_key in series_keys
             if data_by_lib[series_key]
         ]
@@ -1032,7 +1027,8 @@ def make_box_plot(
             patch.set_facecolor(color)
 
         ax.set_ylabel("Time (ms)")
-        ax.set_title(f"{operation} - Distribution Across All Benchmarks")
+        scope = operation if backend is None else f"{operation} [{backend}]"
+        ax.set_title(f"{scope} - Distribution Across All Benchmarks")
         ax.grid(True, axis="y", alpha=0.3)
 
         # Rotate x labels if needed
@@ -1051,7 +1047,7 @@ def make_box_plot(
     if output_path is None:
         output_path = csv_path.parent / "plot_box.png"
 
-    fig.savefig(output_path, dpi=300)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Box plot saved to: {output_path}")
     plt.close(fig)
 
@@ -1191,7 +1187,8 @@ Examples:
     else:
         output_dir = run_dir
 
-    # Generate plots
+    # Generate one figure per operation so unrelated functions never share a
+    # canvas or scale.
     plot_funcs = {
         "line": (make_line_plot, {}),
         "heatmap": (make_heatmap_plot, {"show_titles": not args.no_titles}),
@@ -1200,25 +1197,49 @@ Examples:
         "box": (make_box_plot, {}),
     }
 
-    if args.plot_type == "all":
-        print(f"\nGenerating all plot types in: {output_dir}\n")
-        for plot_name, (plot_func, kwargs) in plot_funcs.items():
-            try:
-                output_path = output_dir / f"plot_{plot_name}.png"
-                if plot_name == "speedup":
-                    output_path = output_dir / f"plot_speedup_{args.baseline}.png"
-                plot_func(csv_path, output_path, **kwargs)
-            except Exception as e:
-                print(f"Error generating {plot_name} plot: {e}")
-    else:
-        plot_func, kwargs = plot_funcs[args.plot_type]
-        try:
-            output_path = output_dir / f"plot_{args.plot_type}.png"
-            if args.plot_type == "speedup":
-                output_path = output_dir / f"plot_speedup_{args.baseline}.png"
-            plot_func(csv_path, output_path, **kwargs)
-        except Exception as e:
-            print(f"Error generating {args.plot_type} plot: {e}")
-            sys.exit(1)
+    all_rows = load_results(csv_path)
+    operations = _ordered_operations(all_rows)
+    backends = sorted(set(row.get("backend", "") for row in all_rows))
+    selected_plot_names = (
+        list(plot_funcs)
+        if args.plot_type == "all"
+        else [args.plot_type]
+    )
+    plots_dir = output_dir / "plots"
+    print(f"\nGenerating plots by operation and backend in: {plots_dir}\n")
+    failed = False
+    for plot_name in selected_plot_names:
+        plot_func, kwargs = plot_funcs[plot_name]
+        plot_dir = plots_dir / plot_name
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        for operation in operations:
+            for backend in backends:
+                if not any(
+                    row["operation"] == operation
+                    and row.get("backend", "") == backend
+                    for row in all_rows
+                ):
+                    continue
+                output_path = plot_dir / (
+                    f"{_safe_filename_part(operation)}_"
+                    f"{_safe_filename_part(backend)}.png"
+                )
+                try:
+                    plot_func(
+                        csv_path,
+                        output_path,
+                        operation=operation,
+                        backend=backend,
+                        **kwargs,
+                    )
+                except Exception as e:
+                    failed = True
+                    print(
+                        f"Error generating {plot_name} plot for "
+                        f"{operation} [{backend}]: {e}",
+                    )
 
-    print(f"\nDone! Plots saved to: {output_dir}")
+    if failed:
+        sys.exit(1)
+
+    print(f"\nDone! Plots saved to: {plots_dir}")

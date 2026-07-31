@@ -1,0 +1,43 @@
+# combined_sweep.yaml
+# Conservative all-operation sweep across every registered library.
+#
+# Signature kernels scale quadratically in both path length and batch size, so
+# this combined run uses the kernel sweep's smaller grid. Use benchmark_sweep.yaml
+# for the larger signature-only grid.
+
+path_kind: "fbm"
+seed: 20260529
+
+Ns: [200, 400, 800]
+Ds: [2, 4, 8, 16]
+
+# Signature-kernel adapters retain this placeholder in the common results schema.
+Ms: [3]
+
+operations:
+    - signature
+    - logsignature
+    - sigdiff
+    - branchedsignature_nonplanar
+    - branchedsignature_planar
+    - signaturekernel
+
+backends:
+    - cpu
+    - gpu
+
+batch_size: 32
+repeats: 10
+
+logsig_method: "S"
+
+sig_kernel_solver: "monomial_approx"
+sig_kernel_max_batch: -1
+
+library_configs:
+    polysigkernel:
+        sig_kernel_order: 3
+    pysiglib:
+        sig_kernel_dyadic_order: 1
+
+runs_dir: "runs"

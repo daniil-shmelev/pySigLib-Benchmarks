@@ -134,6 +134,23 @@ libraries:
       - logsignature
       - sigdiff
 
+  tensordev:
+    type: python
+    script: "adapters/python/run_tensordev.py"
+    extras:
+      - tensordev
+    backends:
+      - name: cpu
+        env:
+          JAX_PLATFORM_NAME: cpu
+      - name: gpu
+        env:
+          JAX_PLATFORM_NAME: gpu
+    operations:
+      - signature
+      - logsignature
+      - sigdiff
+
   keras_sig:
     type: python
     script: "adapters/python/run_keras_sig.py"
