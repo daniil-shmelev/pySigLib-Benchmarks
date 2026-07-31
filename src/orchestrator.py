@@ -962,7 +962,7 @@ def run_orchestrator(
                                     backend_name,
                                     task_config,
                                 )
-                                if path_kind.lower() == "fbm":
+                                if path_kind.lower() == "brownian":
                                     task_config["input_cache_dir"] = str(
                                         run_dir / "inputs"
                                     )

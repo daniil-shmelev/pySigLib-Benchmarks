@@ -1,7 +1,7 @@
 # signature_kernel_sweep.yaml
 # Complete pairwise signature-kernel sweep across all registered libraries.
 
-path_kind: "fbm"
+path_kind: "brownian"
 seed: 20260529
 
 # Path lengths

@@ -19,7 +19,7 @@ from .paths import make_path, make_path_batch
 
 
 @lru_cache(maxsize=4)
-def _load_fbm_input(cache_path: str) -> np.ndarray:
+def _load_stochastic_input(cache_path: str) -> np.ndarray:
     return np.load(cache_path, allow_pickle=False)
 
 
@@ -48,7 +48,7 @@ class BenchmarkAdapter:
                 - N: Number of path points
                 - d: Dimension
                 - m: Signature truncation level
-                - path_kind: "linear", "sin", or "fbm"
+                - path_kind: "linear", "sin", or "brownian"
                 - operation: "signature", "logsignature", "sigdiff",
                   "branchedsignature_nonplanar", "branchedsignature_planar",
                   or "signaturekernel"
@@ -72,14 +72,14 @@ class BenchmarkAdapter:
         self.seed = int(config.get("seed", 0))
         self._input_index = 0
 
-    def _cached_fbm_input(self, logical_seed: int) -> Optional[np.ndarray]:
-        """Load a saved fBM input, or generate and save it atomically."""
+    def _cached_stochastic_input(self, logical_seed: int) -> Optional[np.ndarray]:
+        """Load a saved stochastic input, or generate and save it atomically."""
         cache_dir = self.config.get("input_cache_dir")
-        if cache_dir is None or self.path_kind.lower() != "fbm":
+        if cache_dir is None or self.path_kind.lower() != "brownian":
             return None
 
         cache_path = Path(cache_dir) / (
-            f"fbm_h0p33_seed{logical_seed}_N{self.N}_d{self.d}"
+            f"brownian_seed{logical_seed}_N{self.N}_d{self.d}"
             f"_batch{self.batch_size}.npy"
         )
         checksum_path = cache_path.with_suffix(".npy.sha256")
@@ -116,7 +116,7 @@ class BenchmarkAdapter:
             )
             os.replace(temporary_checksum, checksum_path)
 
-        path = _load_fbm_input(str(cache_path.resolve()))
+        path = _load_stochastic_input(str(cache_path.resolve()))
         expected_shape = (
             (self.N, self.d)
             if self.batch_size == 1
@@ -151,13 +151,13 @@ class BenchmarkAdapter:
 
     def make_path_input(self):
         """Generate this benchmark's input path, batched when requested."""
-        # fbm uses NumPy's legacy global RNG internally. Reset it for each
+        # Stochastic generators use NumPy's global RNG. Reset it for each
         # logical input so every library/backend receives the same path data.
         logical_seed = self.seed + self._input_index
         np.random.seed(logical_seed)
         self._input_index += 1
 
-        cached_path = self._cached_fbm_input(logical_seed)
+        cached_path = self._cached_stochastic_input(logical_seed)
         if cached_path is not None:
             return cached_path
 

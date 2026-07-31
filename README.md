@@ -93,8 +93,8 @@ source; `log-signatures-pytorch` uses a pinned compatibility wheel; and
 
 ## Protocol and output
 
-- Seeded fBM inputs are cached with SHA-256 sidecars and reused across matching
-  libraries and backends.
+- Seeded standard Brownian inputs are cached with SHA-256 sidecars and reused
+  across matching libraries and backends.
 - Python tasks reuse persistent worker processes. Most adapters use one process
   per backend; adapters whose native state affects later measurements can
   recycle the worker at shape boundaries. Framework imports, CUDA

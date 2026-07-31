@@ -1,7 +1,7 @@
 # benchmark_sweep.yaml
 # Complete signature-family sweep across all registered libraries.
 
-path_kind: "fbm"
+path_kind: "brownian"
 seed: 20260529
 
 # Path lengths

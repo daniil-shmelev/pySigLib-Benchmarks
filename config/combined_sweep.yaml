@@ -5,7 +5,7 @@
 # this combined run uses the kernel sweep's smaller grid. Use benchmark_sweep.yaml
 # for the larger signature-only grid.
 
-path_kind: "fbm"
+path_kind: "brownian"
 seed: 20260529
 
 Ns: [200, 400, 800]

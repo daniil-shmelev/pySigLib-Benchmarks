@@ -6,7 +6,6 @@ dependencies = [
     "pyyaml>=6.0.3",
     "matplotlib>=3.9.4",
     "numpy",
-    "fbm>=0.3.0",
     "tqdm",
 ]
 
@@ -63,7 +62,6 @@ all = [
     "chen-signatures==0.2.4",
     # "iisignature",
     "cmake>=3.24",
-    "fbm>=0.3.0",
     "jax[cuda]",
     "ninja>=1.11",
     "pysiglib[cuda]>=3.0.3",
