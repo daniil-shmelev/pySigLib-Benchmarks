@@ -17,10 +17,14 @@ Ms: [3]
 operations:
     - signature
     - logsignature
-    - sigdiff
+    - sig_backprop
+    - logsignature_backprop
     - branchedsignature_nonplanar
+    - branchedsignature_nonplanar_backprop
     - branchedsignature_planar
+    - branchedsignature_planar_backprop
     - signaturekernel
+    - signaturekernel_backprop
 
 backends:
     - cpu

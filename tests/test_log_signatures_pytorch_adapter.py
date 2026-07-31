@@ -28,7 +28,10 @@ def _config(operation):
     }
 
 
-@pytest.mark.parametrize("operation", ["signature", "logsignature", "sigdiff"])
+@pytest.mark.parametrize(
+    "operation",
+    ["signature", "logsignature", "sig_backprop", "logsignature_backprop"],
+)
 def test_cpu_adapter_uses_native_float32_batch(monkeypatch, operation):
     torch = pytest.importorskip("torch")
     package = types.ModuleType("log_signatures_pytorch")
@@ -51,8 +54,10 @@ def test_cpu_adapter_uses_native_float32_batch(monkeypatch, operation):
         result = adapter.run_signature(path, 2, 2)()
     elif operation == "logsignature":
         result = adapter.run_logsignature(path, 2, 2)()
+    elif operation == "sig_backprop":
+        result = adapter.run_sig_backprop(path, 2, 2)()
     else:
-        result = adapter.run_sigdiff(path, 2, 2)()
+        result = adapter.run_logsignature_backprop(path, 2, 2)()
 
     assert result.dtype == torch.float32
     assert result.shape[0] == 3

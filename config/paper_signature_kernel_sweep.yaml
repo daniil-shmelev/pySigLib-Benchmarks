@@ -1,0 +1,37 @@
+# Signature-kernel sweep for the pySigLib paper.
+
+libraries:
+    - pysiglib
+    - polysigkernel
+
+path_kind: "brownian"
+seed: 20260529
+
+Ns: [1000]
+Ds: [2, 4, 8, 16]
+Ms: [3]
+
+operations:
+    - signaturekernel
+    - signaturekernel_backprop
+
+backends:
+    - cpu
+    - gpu
+
+batch_size: 32
+repeats: 3
+warmup_iterations: 1
+timing_statistic: "min"
+clear_input_caches_after_task: true
+
+sig_kernel_solver: "monomial_approx"
+sig_kernel_max_batch: -1
+
+library_configs:
+    polysigkernel:
+        sig_kernel_order: 3
+    pysiglib:
+        sig_kernel_dyadic_order: 1
+
+runs_dir: "runs"

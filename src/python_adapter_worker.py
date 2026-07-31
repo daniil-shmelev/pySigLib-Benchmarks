@@ -12,6 +12,7 @@ from types import ModuleType
 from typing import Type
 
 from common import BenchmarkAdapter
+from common.adapter import clear_cached_inputs
 
 
 PROTOCOL_PREFIX = "__PYSIGLIB_BENCHMARK_WORKER__"
@@ -73,7 +74,12 @@ def main() -> int:
     for line in sys.stdin:
         try:
             config = json.loads(line)
-            result = adapter_class(config)._run_benchmark()
+            config["_call_event_callback"] = send_response
+            try:
+                result = adapter_class(config)._run_benchmark()
+            finally:
+                if config.get("clear_input_caches_after_task", False):
+                    clear_cached_inputs()
             send_response({"status": "result", "result": result})
         except Exception as error:
             send_response({

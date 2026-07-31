@@ -12,11 +12,31 @@ CONFIG_DIR = REPO_ROOT / "config"
 SIGNATURE_OPERATIONS = {
     "signature",
     "logsignature",
-    "sigdiff",
+    "sig_backprop",
     "branchedsignature_nonplanar",
     "branchedsignature_planar",
 }
 KERNEL_OPERATIONS = {"signaturekernel"}
+BACKPROP_OPERATIONS = {
+    "sig_backprop",
+    "logsignature_backprop",
+    "branchedsignature_nonplanar_backprop",
+    "branchedsignature_planar_backprop",
+    "signaturekernel_backprop",
+}
+PAPER_SIGNATURE_LIBRARIES = {
+    "iisignature",
+    "log-signatures-pytorch",
+    "pathsig",
+    "pysiglib",
+    "stochastax",
+    "signax",
+    "tensordev",
+    "keras_sig",
+}
+PAPER_LOGSIGNATURE_LIBRARIES = PAPER_SIGNATURE_LIBRARIES - {"keras_sig"}
+PAPER_BRANCHED_LIBRARIES = {"pysiglib", "stochastax"}
+PAPER_KERNEL_LIBRARIES = {"pysiglib", "polysigkernel"}
 
 
 def _load_yaml(name: str) -> dict:
@@ -32,7 +52,9 @@ def test_complete_sweep_operation_sets():
 
     assert set(signatures["operations"]) == SIGNATURE_OPERATIONS
     assert set(kernels["operations"]) == KERNEL_OPERATIONS
-    assert set(combined["operations"]) == SIGNATURE_OPERATIONS | KERNEL_OPERATIONS
+    assert set(combined["operations"]) == (
+        SIGNATURE_OPERATIONS | KERNEL_OPERATIONS | BACKPROP_OPERATIONS
+    )
     registry_operations = {
         operation
         for library in registry["libraries"].values()
@@ -54,3 +76,53 @@ def test_every_registry_extra_is_defined():
     }
 
     assert registry_extras <= defined_extras
+
+
+def _assert_paper_settings(paper: dict, expected_N: int = 1000) -> None:
+    assert paper["Ns"] == [expected_N]
+    assert paper["Ds"] == [2, 4, 8, 16]
+    assert paper["repeats"] == 3
+    assert paper["warmup_iterations"] == 1
+    assert paper["timing_statistic"] == "min"
+    assert "call_timeout_seconds" not in paper
+    assert paper["clear_input_caches_after_task"] is True
+
+
+def test_problem_specific_paper_sweeps():
+    signatures = _load_yaml("paper_signatures_sweep.yaml")
+    logsignatures = _load_yaml("paper_logsignatures_sweep.yaml")
+    branched = _load_yaml("paper_branched_signatures_sweep.yaml")
+    kernels = _load_yaml("paper_signature_kernel_sweep.yaml")
+
+    _assert_paper_settings(signatures, expected_N=10000)
+    for paper in (logsignatures, branched, kernels):
+        _assert_paper_settings(paper)
+
+    assert set(signatures["libraries"]) == PAPER_SIGNATURE_LIBRARIES
+    assert set(signatures["operations"]) == {
+        "signature",
+        "sig_backprop",
+    }
+    assert set(logsignatures["libraries"]) == PAPER_LOGSIGNATURE_LIBRARIES
+    assert set(logsignatures["operations"]) == {
+        "logsignature",
+        "logsignature_backprop",
+    }
+    assert set(branched["libraries"]) == PAPER_BRANCHED_LIBRARIES
+    assert set(branched["operations"]) == {
+        "branchedsignature_nonplanar",
+        "branchedsignature_nonplanar_backprop",
+        "branchedsignature_planar",
+        "branchedsignature_planar_backprop",
+    }
+    assert set(kernels["libraries"]) == PAPER_KERNEL_LIBRARIES
+    assert set(kernels["operations"]) == {
+        "signaturekernel",
+        "signaturekernel_backprop",
+    }
+
+    registry = _load_yaml("libraries_registry.yaml")["libraries"]
+    for paper in (signatures, logsignatures, branched, kernels):
+        operations = set(paper["operations"])
+        for library_name in paper["libraries"]:
+            assert operations <= set(registry[library_name]["operations"])

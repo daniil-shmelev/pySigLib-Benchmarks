@@ -142,7 +142,7 @@ function prepare_kernel(path, operation::String, m::Int)
     elseif operation == "logsignature"
         return run_logsignature(path, m), "log"
     else
-        # Operation not supported (sigdiff not available yet)
+        # Operation not supported (sig_backprop not available yet)
         error("Unsupported operation: $operation")
     end
 end

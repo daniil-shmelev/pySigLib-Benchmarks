@@ -1,0 +1,35 @@
+# Forward and backward log-signature sweep for the pySigLib paper.
+
+libraries:
+    - iisignature
+    - log-signatures-pytorch
+    - pathsig
+    - pysiglib
+    - stochastax
+    - signax
+    - tensordev
+
+path_kind: "brownian"
+seed: 20260529
+
+Ns: [1000]
+Ds: [2, 4, 8, 16]
+Ms: [2, 3]
+
+operations:
+    - logsignature
+    - logsignature_backprop
+
+backends:
+    - cpu
+    - gpu
+
+batch_size: 256
+repeats: 3
+warmup_iterations: 1
+timing_statistic: "min"
+clear_input_caches_after_task: true
+
+logsig_method: "S"
+
+runs_dir: "runs"

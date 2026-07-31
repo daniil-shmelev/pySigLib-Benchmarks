@@ -86,13 +86,49 @@ class PathSigAdapter(BenchmarkAdapter):
         ).eval()
         return self._synchronized(lambda: module(path))
 
-    def run_sigdiff(self, path: np.ndarray, d: int, m: int) -> Callable:
+    def run_sig_backprop(self, path: np.ndarray, d: int, m: int) -> Callable:
         path = self._path_tensor(path, d, requires_grad=True)
         module = self.pathsig.Signature(depth=m).eval()
+        output = module(path)
+        cotangent = self.torch.as_tensor(
+            self.random_cotangent(tuple(output.shape)),
+            dtype=output.dtype,
+            device=output.device,
+        )
 
         def gradient():
-            signature = module(path)
-            return self.torch.autograd.grad(signature.sum(), path)
+            return self.torch.autograd.grad(
+                output,
+                path,
+                cotangent,
+                retain_graph=True,
+            )
+
+        return self._synchronized(gradient)
+
+    def run_logsignature_backprop(
+        self, path: np.ndarray, d: int, m: int
+    ) -> Callable:
+        path = self._path_tensor(path, d, requires_grad=True)
+        projection = self.pathsig.projections.lyndon(depth=m, path_dim=d)
+        module = self.pathsig.LogSignature(
+            depth=m,
+            projection=projection,
+        ).eval()
+        output = module(path)
+        cotangent = self.torch.as_tensor(
+            self.random_cotangent(tuple(output.shape)),
+            dtype=output.dtype,
+            device=output.device,
+        )
+
+        def gradient():
+            return self.torch.autograd.grad(
+                output,
+                path,
+                cotangent,
+                retain_graph=True,
+            )
 
         return self._synchronized(gradient)
 
@@ -104,9 +140,12 @@ class PathSigAdapter(BenchmarkAdapter):
         elif self.operation == "logsignature":
             kernel = self.run_logsignature(path, self.d, self.m)
             method = "LogSignature(LyndonProjection)"
-        elif self.operation == "sigdiff":
-            kernel = self.run_sigdiff(path, self.d, self.m)
-            method = "autograd.grad(Signature)"
+        elif self.operation == "sig_backprop":
+            kernel = self.run_sig_backprop(path, self.d, self.m)
+            method = "Signature.backward(random_cotangent)"
+        elif self.operation == "logsignature_backprop":
+            kernel = self.run_logsignature_backprop(path, self.d, self.m)
+            method = "LogSignature.backward(random_cotangent)"
         else:
             return None
 

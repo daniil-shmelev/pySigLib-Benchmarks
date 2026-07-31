@@ -11,6 +11,8 @@ libraries:
     operations:
       - signature
       - logsignature
+      - sig_backprop
+      - logsignature_backprop
 
   roughpy:
     type: python
@@ -47,7 +49,8 @@ libraries:
     operations:
       - signature
       - logsignature
-      - sigdiff
+      - sig_backprop
+      - logsignature_backprop
 
   pathsig:
     type: python
@@ -61,7 +64,8 @@ libraries:
     operations:
       - signature
       - logsignature
-      - sigdiff
+      - sig_backprop
+      - logsignature_backprop
 
   pysiglib:
     type: python
@@ -78,10 +82,14 @@ libraries:
     operations:
       - signature
       - logsignature
-      - sigdiff
+      - sig_backprop
+      - logsignature_backprop
       - branchedsignature_nonplanar
       - branchedsignature_planar
+      - branchedsignature_nonplanar_backprop
+      - branchedsignature_planar_backprop
       - signaturekernel
+      - signaturekernel_backprop
 
   polysigkernel:
     type: python
@@ -97,6 +105,7 @@ libraries:
           JAX_PLATFORM_NAME: gpu
     operations:
       - signaturekernel
+      - signaturekernel_backprop
 
   stochastax:
     type: python
@@ -113,9 +122,12 @@ libraries:
     operations:
       - signature
       - logsignature
-      - sigdiff
+      - sig_backprop
+      - logsignature_backprop
       - branchedsignature_nonplanar
       - branchedsignature_planar
+      - branchedsignature_nonplanar_backprop
+      - branchedsignature_planar_backprop
 
   signax:
     type: python
@@ -132,7 +144,8 @@ libraries:
     operations:
       - signature
       - logsignature
-      - sigdiff
+      - sig_backprop
+      - logsignature_backprop
 
   tensordev:
     type: python
@@ -149,7 +162,8 @@ libraries:
     operations:
       - signature
       - logsignature
-      - sigdiff
+      - sig_backprop
+      - logsignature_backprop
 
   keras_sig:
     type: python
@@ -165,7 +179,7 @@ libraries:
           JAX_PLATFORM_NAME: gpu
     operations:
       - signature
-      - sigdiff
+      - sig_backprop
 
   chen-signatures:
     type: python
@@ -176,7 +190,7 @@ libraries:
     operations:
       - signature
       - logsignature
-      - sigdiff
+      - sig_backprop
 
   # ChenSignatures.jl:
   #   type: julia

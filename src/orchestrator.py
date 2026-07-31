@@ -4,13 +4,18 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 import platform
+import queue
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -45,6 +50,7 @@ RESULT_FIELDS = [
     "library",
     "method",
     "path_type",
+    "timing_statistic",
     "t_ms",
     "t_ms_mean",
     "t_ms_std",
@@ -53,6 +59,8 @@ RESULT_FIELDS = [
 ]
 COMPLETED_TASKS_FILE = "completed_tasks.txt"
 SKIPPED_TASKS_FILE = "skipped_tasks.csv"
+FAILED_TASKS_FILE = "failed_tasks.csv"
+ADAPTIVE_BLOCKS_FILE = "adaptive_blocks.csv"
 SKIPPED_TASK_FIELDS = [
     "task_id",
     "library",
@@ -64,9 +72,28 @@ SKIPPED_TASK_FIELDS = [
     "batch_size",
     "reason",
 ]
+FAILED_TASK_FIELDS = [
+    *SKIPPED_TASK_FIELDS[:-1],
+    "error_type",
+    "reason",
+]
+ADAPTIVE_BLOCK_FIELDS = [
+    "block_id",
+    "nominal_N",
+    "final_N",
+    "d",
+    "m",
+    "operation",
+    "backend",
+    "fastest_t_ms",
+]
 UNSUPPORTED_ERROR_MARKERS = (
     "CUDA branched sig: num_trees > 1024 not supported",
 )
+
+
+class BenchmarkCallTimeout(TimeoutError):
+    """A benchmark kernel call exceeded its configured deadline."""
 
 
 def load_yaml(path: Path) -> Dict[str, Any]:
@@ -133,6 +160,34 @@ def initialize_skipped_tasks_csv(csv_path: Path) -> None:
         writer.writeheader()
         skipped_file.flush()
         os.fsync(skipped_file.fileno())
+
+
+def initialize_failed_tasks_csv(csv_path: Path) -> None:
+    """Create the durable record of failed benchmark tasks."""
+    with csv_path.open("w", newline="", encoding="utf-8") as failed_file:
+        writer = csv.DictWriter(failed_file, fieldnames=FAILED_TASK_FIELDS)
+        writer.writeheader()
+        failed_file.flush()
+        os.fsync(failed_file.fileno())
+
+
+def initialize_adaptive_blocks_csv(csv_path: Path) -> None:
+    """Create the durable record of completed adaptive comparison blocks."""
+    with csv_path.open("w", newline="", encoding="utf-8") as blocks_file:
+        writer = csv.DictWriter(blocks_file, fieldnames=ADAPTIVE_BLOCK_FIELDS)
+        writer.writeheader()
+        blocks_file.flush()
+        os.fsync(blocks_file.fileno())
+
+
+def load_adaptive_blocks(csv_path: Path) -> Dict[str, Dict[str, str]]:
+    if not csv_path.exists():
+        return {}
+    with csv_path.open("r", newline="", encoding="utf-8") as blocks_file:
+        return {
+            row["block_id"]: row
+            for row in csv.DictReader(blocks_file)
+        }
 
 
 def discard_uncommitted_rows(
@@ -215,6 +270,37 @@ def append_skipped_task(
     })
     skipped_file.flush()
     os.fsync(skipped_file.fileno())
+
+    completed_file.write(task_id + "\n")
+    completed_file.flush()
+    os.fsync(completed_file.fileno())
+
+
+def append_failed_task(
+    writer: csv.DictWriter,
+    failed_file,
+    completed_file,
+    task_id: str,
+    library_name: str,
+    backend_name: str,
+    task_config: Dict[str, Any],
+    error: Exception,
+) -> None:
+    """Record a failed task, then commit it so resume will not retry it."""
+    writer.writerow({
+        "task_id": task_id,
+        "library": library_name,
+        "backend": backend_name,
+        "operation": task_config["operation"],
+        "N": task_config["N"],
+        "d": task_config["d"],
+        "m": task_config["m"],
+        "batch_size": task_config["batch_size"],
+        "error_type": type(error).__name__,
+        "reason": str(error),
+    })
+    failed_file.flush()
+    os.fsync(failed_file.fileno())
 
     completed_file.write(task_id + "\n")
     completed_file.flush()
@@ -323,6 +409,17 @@ def write_run_metadata(run_dir: Path, sweep_config: Path) -> None:
     lockfile = REPO_ROOT / "uv.lock"
     if lockfile.exists():
         shutil.copy2(lockfile, run_dir / "uv.lock")
+
+
+def record_run_completion(run_dir: Path, wall_time_seconds: float) -> None:
+    metadata_path = run_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["completed_at"] = datetime.now().astimezone().isoformat()
+    metadata["wall_time_seconds"] = wall_time_seconds
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _progress_write(line: str, *, file=None) -> None:
@@ -499,6 +596,8 @@ class PythonAdapterWorker:
         self.diagnostics: List[str] = []
         self.scope = library_config.get("worker_scope")
         self.scope_key = None
+        self._output_queue = None
+        self._reader_thread = None
 
     def __enter__(self):
         return self
@@ -507,12 +606,28 @@ class PythonAdapterWorker:
         self.close()
 
     def _read_response(self) -> Dict[str, Any]:
-        if self.process is None or self.process.stdout is None:
+        if self.process is None or self._output_queue is None:
             raise RuntimeError(f"{self.library_name}: worker is not running")
 
+        deadline = None
+        active_call = None
         while True:
-            line = self.process.stdout.readline()
-            if line == "":
+            timeout = None
+            if deadline is not None:
+                timeout = max(0.0, deadline - time.monotonic())
+            try:
+                line = self._output_queue.get(timeout=timeout)
+            except queue.Empty:
+                phase = active_call.get("phase", "call")
+                iteration = active_call.get("iteration", 0) + 1
+                timeout_seconds = active_call["timeout_seconds"]
+                self._kill_process_tree()
+                raise BenchmarkCallTimeout(
+                    f"{self.library_name}: {phase} call {iteration} exceeded "
+                    f"{timeout_seconds:g} seconds"
+                )
+
+            if line is None:
                 return_code = self.process.poll()
                 details = "\n".join(self.diagnostics[-20:])
                 raise RuntimeError(
@@ -525,10 +640,52 @@ class PythonAdapterWorker:
                 diagnostic = line[:protocol_index]
                 if diagnostic:
                     self.diagnostics.append(diagnostic)
-                payload = line[protocol_index + len(PYTHON_WORKER_PROTOCOL_PREFIX):]
-                return json.loads(payload)
+                payload = json.loads(
+                    line[protocol_index + len(PYTHON_WORKER_PROTOCOL_PREFIX):]
+                )
+                status = payload.get("status")
+                if status == "call_start":
+                    timeout_seconds = float(payload["timeout_seconds"])
+                    active_call = {
+                        **payload,
+                        "timeout_seconds": timeout_seconds,
+                    }
+                    deadline = time.monotonic() + timeout_seconds
+                    continue
+                if status == "call_end":
+                    active_call = None
+                    deadline = None
+                    continue
+                return payload
             if line:
                 self.diagnostics.append(line)
+
+    @staticmethod
+    def _read_output(stdout, output_queue: queue.Queue) -> None:
+        for line in stdout:
+            output_queue.put(line)
+        output_queue.put(None)
+
+    def _kill_process_tree(self) -> None:
+        if self.process is None:
+            return
+        process = self.process
+        if os.name == "posix":
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+            )
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 
     def _start(self) -> None:
         if self.process is not None:
@@ -543,6 +700,11 @@ class PythonAdapterWorker:
             str(PYTHON_ADAPTER_WORKER),
             str(script_path),
         ])
+        popen_kwargs = {}
+        if os.name == "posix":
+            popen_kwargs["start_new_session"] = True
+        else:
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         self.process = subprocess.Popen(
             command,
             cwd=REPO_ROOT,
@@ -554,7 +716,15 @@ class PythonAdapterWorker:
             encoding="utf-8",
             errors="replace",
             bufsize=1,
+            **popen_kwargs,
         )
+        self._output_queue = queue.Queue()
+        self._reader_thread = threading.Thread(
+            target=self._read_output,
+            args=(self.process.stdout, self._output_queue),
+            daemon=True,
+        )
+        self._reader_thread.start()
         response = self._read_response()
         if response.get("status") != "ready":
             raise RuntimeError(
@@ -610,7 +780,10 @@ class PythonAdapterWorker:
         if self.process is None:
             return
         if self.process.stdin is not None:
-            self.process.stdin.close()
+            try:
+                self.process.stdin.close()
+            except BrokenPipeError:
+                pass
         try:
             self.process.wait(timeout=10)
         except subprocess.TimeoutExpired:
@@ -624,6 +797,8 @@ class PythonAdapterWorker:
             self.process.stdout.close()
         self.process = None
         self.scope_key = None
+        self._output_queue = None
+        self._reader_thread = None
 
 
 def run_python_adapter(
@@ -760,6 +935,598 @@ def format_task_label(
     )
 
 
+def build_task_config(
+    sweep: Dict[str, Any],
+    library_name: str,
+    *,
+    N: int,
+    d: int,
+    m: int,
+    path_kind: str,
+    operation: str,
+    repeats: int,
+    batch_size: int,
+    seed: int,
+    backend_name: str,
+) -> Dict[str, Any]:
+    task_config = {
+        "N": N,
+        "d": d,
+        "m": m,
+        "path_kind": path_kind,
+        "operation": operation,
+        "repeats": repeats,
+        "batch_size": batch_size,
+        "seed": seed,
+        "backend": backend_name,
+    }
+    for key in (
+        "logsig_method",
+        "log_sig_method",
+        "num_chunks",
+        "sig_kernel_order",
+        "sig_kernel_solver",
+        "sig_kernel_dyadic_order",
+        "sig_kernel_max_batch",
+        "warmup_iterations",
+        "timing_statistic",
+        "call_timeout_seconds",
+        "clear_input_caches_after_task",
+    ):
+        if key in sweep:
+            task_config[key] = sweep[key]
+    task_config.update(
+        sweep.get("library_configs", {}).get(library_name, {})
+    )
+    return task_config
+
+
+def _adaptive_block_id(
+    nominal_N: int,
+    d: int,
+    m: int,
+    operation: str,
+    backend_name: str,
+) -> str:
+    encoded = json.dumps(
+        [nominal_N, d, m, operation, backend_name],
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def build_sweep_cases(
+    sweep: Dict[str, Any],
+    Ns: Sequence[int],
+    Ds: Sequence[int],
+    Ms: Sequence[int],
+    operations: Sequence[str],
+) -> List[Dict[str, Any]]:
+    fixed_lengths = sweep.get("path_lengths")
+    if fixed_lengths is None:
+        return [
+            {
+                "N": int(N),
+                "d": int(d),
+                "m": int(m),
+                "operation": operation,
+                "backend": None,
+            }
+            for N in Ns
+            for d in Ds
+            for m in Ms
+            for operation in operations
+        ]
+    if not isinstance(fixed_lengths, list):
+        raise ValueError("path_lengths must be a list")
+
+    cases = []
+    seen = set()
+    for entry in fixed_lengths:
+        if not isinstance(entry, dict):
+            raise ValueError("each path_lengths entry must be a mapping")
+        try:
+            d = int(entry["d"])
+            m = int(entry["m"])
+            operation = str(entry["operation"])
+            backends = entry["backends"]
+        except KeyError as error:
+            raise ValueError(
+                f"path_lengths entry is missing {error.args[0]}"
+            ) from error
+        if not isinstance(backends, dict) or not backends:
+            raise ValueError("path_lengths backends must be a non-empty mapping")
+        for backend_name, value in backends.items():
+            N = int(value)
+            if N < 2:
+                raise ValueError("fixed path lengths must be >= 2")
+            key = (d, m, operation, str(backend_name))
+            if key in seen:
+                raise ValueError(
+                    "duplicate fixed path length for "
+                    f"d={d}, m={m}, operation={operation}, "
+                    f"backend={backend_name}"
+                )
+            seen.add(key)
+            cases.append({
+                "N": N,
+                "d": d,
+                "m": m,
+                "operation": operation,
+                "backend": str(backend_name),
+            })
+    return cases
+
+
+def remove_adaptive_inputs(
+    run_dir: Path,
+    *,
+    seed: int,
+    N: int,
+    d: int,
+    batch_size: int,
+    path_count: int,
+) -> None:
+    inputs_dir = run_dir / "inputs"
+    for logical_seed in range(seed, seed + path_count):
+        cache_name = (
+            f"brownian_seed{logical_seed}_N{N}_d{d}_batch{batch_size}.npy"
+        )
+        cache_path = inputs_dir / cache_name
+        cache_path.unlink(missing_ok=True)
+        cache_path.with_suffix(".npy.sha256").unlink(missing_ok=True)
+        for temporary_path in inputs_dir.glob(f".{cache_name}.*.tmp"):
+            temporary_path.unlink(missing_ok=True)
+
+
+def run_adaptive_tasks(
+    *,
+    sweep: Dict[str, Any],
+    libraries: Dict[str, Dict[str, Any]],
+    library_backends: Dict[str, List[Dict[str, Any]]],
+    Ns: Sequence[int],
+    Ds: Sequence[int],
+    Ms: Sequence[int],
+    operations: Sequence[str],
+    path_kind: str,
+    repeats: int,
+    batch_size: int,
+    seed: int,
+    run_dir: Path,
+    csv_path: Path,
+    completed_path: Path,
+    skipped_path: Path,
+    failed_path: Path,
+    blocks_path: Path,
+    completed_tasks: set[str],
+    completed_blocks: Dict[str, Dict[str, str]],
+) -> None:
+    minimum_time_ms = float(sweep["adaptive_min_time_ms"])
+    growth_factor = int(sweep.get("adaptive_growth_factor", 2))
+    maximum_growth_factor = int(
+        sweep.get("adaptive_max_growth_factor", 16)
+    )
+    maximum_N = int(sweep.get("adaptive_max_N", 1048576))
+    maximum_input_bytes = int(
+        sweep.get("adaptive_max_input_bytes", 1073741824)
+    )
+    if minimum_time_ms <= 0:
+        raise ValueError("adaptive_min_time_ms must be > 0")
+    if growth_factor <= 1:
+        raise ValueError("adaptive_growth_factor must be > 1")
+    if maximum_growth_factor < growth_factor:
+        raise ValueError(
+            "adaptive_max_growth_factor must be >= adaptive_growth_factor"
+        )
+
+    backend_names = sorted({
+        backend.get("name", "")
+        for backends in library_backends.values()
+        for backend in backends
+    })
+    blocks = [
+        (nominal_N, d, m, operation, backend_name)
+        for nominal_N in Ns
+        for d in Ds
+        for m in Ms
+        for operation in operations
+        for backend_name in backend_names
+        if any(
+            operation in libraries[library_name].get("operations", [])
+            and any(
+                backend.get("name", "") == backend_name
+                for backend in library_backends[library_name]
+            )
+            for library_name in libraries
+        )
+    ]
+    previous_final_N: Dict[tuple[int, int, str, str], int] = {}
+
+    with (
+        csv_path.open("a", newline="", encoding="utf-8") as results_file,
+        skipped_path.open("a", newline="", encoding="utf-8") as skipped_file,
+        failed_path.open("a", newline="", encoding="utf-8") as failed_file,
+        blocks_path.open("a", newline="", encoding="utf-8") as blocks_file,
+        completed_path.open("a", encoding="utf-8") as completed_file,
+        tqdm(total=len(blocks), unit="block", dynamic_ncols=True, leave=True) as progress,
+    ):
+        writer = csv.DictWriter(
+            results_file,
+            fieldnames=RESULT_FIELDS,
+            extrasaction="ignore",
+        )
+        skipped_writer = csv.DictWriter(
+            skipped_file,
+            fieldnames=SKIPPED_TASK_FIELDS,
+            extrasaction="ignore",
+        )
+        failed_writer = csv.DictWriter(
+            failed_file,
+            fieldnames=FAILED_TASK_FIELDS,
+            extrasaction="ignore",
+        )
+        blocks_writer = csv.DictWriter(
+            blocks_file,
+            fieldnames=ADAPTIVE_BLOCK_FIELDS,
+        )
+
+        for nominal_N, d, m, operation, backend_name in blocks:
+                block_id = _adaptive_block_id(
+                    nominal_N,
+                    d,
+                    m,
+                    operation,
+                    backend_name,
+                )
+                series_key = (d, m, operation, backend_name)
+                if block_id in completed_blocks:
+                    previous_final_N[series_key] = int(
+                        completed_blocks[block_id]["final_N"]
+                    )
+                    progress.update(1)
+                    continue
+
+                previous_N = previous_final_N.get(series_key)
+                candidate_N = nominal_N
+                if previous_N is not None and candidate_N <= previous_N:
+                    candidate_N = previous_N * growth_factor
+
+                participants = []
+                for library_name, library_config in libraries.items():
+                    if operation not in library_config.get("operations", []):
+                        continue
+                    for backend in library_backends[library_name]:
+                        if backend.get("name", "") == backend_name:
+                            participants.append(
+                                (library_name, library_config, backend)
+                            )
+
+                final_results = []
+                terminal_failures = []
+                terminal_skips = []
+                fastest_t_ms = None
+                calibrated = []
+                used_path_lengths = set()
+                path_count = 2 if operation.startswith("signaturekernel") else 1
+
+                def execute(participant, task_N, worker):
+                    library_name, library_config, backend = participant
+                    task_config = build_task_config(
+                        sweep,
+                        library_name,
+                        N=task_N,
+                        d=d,
+                        m=m,
+                        path_kind=path_kind,
+                        operation=operation,
+                        repeats=repeats,
+                        batch_size=batch_size,
+                        seed=seed,
+                        backend_name=backend_name,
+                    )
+                    if path_kind.lower() == "brownian":
+                        task_config["input_cache_dir"] = str(run_dir / "inputs")
+                        used_path_lengths.add(task_N)
+                    task_label = format_task_label(
+                        library_name,
+                        backend_name,
+                        operation,
+                        N=task_N,
+                        d=d,
+                        m=m,
+                        batch_size=batch_size,
+                    )
+                    progress.set_description_str(task_label, refresh=True)
+                    progress.set_postfix_str("calibrating", refresh=True)
+                    if library_config["type"] == "python":
+                        result = run_python_adapter(
+                            library_name,
+                            library_config,
+                            task_config,
+                            env_overrides=backend.get("env", {}),
+                            worker=worker,
+                        )
+                    elif library_config["type"] == "julia":
+                        result = run_julia_adapter(
+                            library_name,
+                            library_config,
+                            task_config,
+                            env_overrides=backend.get("env", {}),
+                        )
+                    else:
+                        raise ValueError(
+                            f"Unknown library type: {library_config['type']}"
+                        )
+                    if result is None:
+                        raise RuntimeError(f"{task_label} returned no result")
+                    rows = result if isinstance(result, list) else [result]
+                    return task_config, result, rows
+
+                for participant in participants:
+                    library_name, library_config, backend = participant
+                    participant_N = candidate_N
+                    worker = (
+                        PythonAdapterWorker(
+                            library_name,
+                            library_config,
+                            backend.get("env", {}),
+                        )
+                        if library_config["type"] == "python"
+                        else None
+                    )
+                    try:
+                        while True:
+                            input_bytes = (
+                                path_count * batch_size * participant_N * d * 4
+                            )
+                            if (
+                                participant_N > maximum_N
+                                or input_bytes > maximum_input_bytes
+                            ):
+                                if participant_N > maximum_N:
+                                    reason = (
+                                        "adaptive path length exceeded maximum "
+                                        f"N={maximum_N}"
+                                    )
+                                else:
+                                    reason = (
+                                        "adaptive input exceeded maximum size "
+                                        f"{maximum_input_bytes} bytes"
+                                    )
+                                task_config = build_task_config(
+                                    sweep,
+                                    library_name,
+                                    N=participant_N,
+                                    d=d,
+                                    m=m,
+                                    path_kind=path_kind,
+                                    operation=operation,
+                                    repeats=repeats,
+                                    batch_size=batch_size,
+                                    seed=seed,
+                                    backend_name=backend_name,
+                                )
+                                terminal_failures.append((
+                                    participant,
+                                    task_config,
+                                    RuntimeError(reason),
+                                ))
+                                break
+                            try:
+                                task_config, result, rows = execute(
+                                    participant,
+                                    participant_N,
+                                    worker,
+                                )
+                            except Exception as error:
+                                task_config = build_task_config(
+                                    sweep,
+                                    library_name,
+                                    N=participant_N,
+                                    d=d,
+                                    m=m,
+                                    path_kind=path_kind,
+                                    operation=operation,
+                                    repeats=repeats,
+                                    batch_size=batch_size,
+                                    seed=seed,
+                                    backend_name=backend_name,
+                                )
+                                unsupported_reason = unsupported_adapter_reason(error)
+                                if unsupported_reason is None:
+                                    terminal_failures.append(
+                                        (participant, task_config, error)
+                                    )
+                                else:
+                                    terminal_skips.append(
+                                        (participant, task_config, unsupported_reason)
+                                    )
+                                break
+                            participant_time = min(
+                                float(row["t_ms"])
+                                for row in rows
+                            )
+                            if participant_time >= minimum_time_ms:
+                                calibrated.append((
+                                    participant,
+                                    participant_N,
+                                    task_config,
+                                    result,
+                                    rows,
+                                ))
+                                break
+                            if participant_time <= 0:
+                                step_growth = maximum_growth_factor
+                            else:
+                                step_growth = math.ceil(
+                                    minimum_time_ms / participant_time
+                                )
+                                step_growth = max(
+                                    growth_factor,
+                                    min(maximum_growth_factor, step_growth),
+                                )
+                            participant_N *= step_growth
+                    finally:
+                        if worker is not None:
+                            worker.close()
+
+                if calibrated:
+                    candidate_N = max(item[1] for item in calibrated)
+                    for calibrated_item in calibrated:
+                        participant, required_N, task_config, result, rows = (
+                            calibrated_item
+                        )
+                        if required_N == candidate_N:
+                            final_results.append(
+                                (participant, task_config, result, rows)
+                            )
+                            continue
+                        library_name, library_config, backend = participant
+                        worker = (
+                            PythonAdapterWorker(
+                                library_name,
+                                library_config,
+                                backend.get("env", {}),
+                            )
+                            if library_config["type"] == "python"
+                            else None
+                        )
+                        try:
+                            task_config, result, rows = execute(
+                                participant,
+                                candidate_N,
+                                worker,
+                            )
+                            if min(float(row["t_ms"]) for row in rows) < minimum_time_ms:
+                                raise RuntimeError(
+                                    "runtime remained below adaptive minimum at "
+                                    f"common N={candidate_N}"
+                                )
+                            final_results.append(
+                                (participant, task_config, result, rows)
+                            )
+                        except Exception as error:
+                            task_config = build_task_config(
+                                sweep,
+                                library_name,
+                                N=candidate_N,
+                                d=d,
+                                m=m,
+                                path_kind=path_kind,
+                                operation=operation,
+                                repeats=repeats,
+                                batch_size=batch_size,
+                                seed=seed,
+                                backend_name=backend_name,
+                            )
+                            unsupported_reason = unsupported_adapter_reason(error)
+                            if unsupported_reason is None:
+                                terminal_failures.append(
+                                    (participant, task_config, error)
+                                )
+                            else:
+                                terminal_skips.append(
+                                    (participant, task_config, unsupported_reason)
+                                )
+                        finally:
+                            if worker is not None:
+                                worker.close()
+
+                    if final_results:
+                        fastest_t_ms = min(
+                            float(row["t_ms"])
+                            for _, _, _, rows in final_results
+                            for row in rows
+                        )
+
+                if path_kind.lower() == "brownian":
+                    for used_N in used_path_lengths:
+                        remove_adaptive_inputs(
+                            run_dir,
+                            seed=seed,
+                            N=used_N,
+                            d=d,
+                            batch_size=batch_size,
+                            path_count=path_count,
+                        )
+
+                for participant, task_config, result, _ in final_results:
+                    library_name, _, _ = participant
+                    task_id = make_task_id(
+                        library_name,
+                        backend_name,
+                        task_config,
+                    )
+                    if task_id not in completed_tasks:
+                        append_task_results(
+                            writer,
+                            results_file,
+                            completed_file,
+                            task_id,
+                            result,
+                        )
+                        completed_tasks.add(task_id)
+
+                for participant, task_config, error in terminal_failures:
+                    library_name, _, _ = participant
+                    task_id = make_task_id(
+                        library_name,
+                        backend_name,
+                        task_config,
+                    )
+                    if task_id not in completed_tasks:
+                        append_failed_task(
+                            failed_writer,
+                            failed_file,
+                            completed_file,
+                            task_id,
+                            library_name,
+                            backend_name,
+                            task_config,
+                            error,
+                        )
+                        completed_tasks.add(task_id)
+
+                for participant, task_config, reason in terminal_skips:
+                    library_name, _, _ = participant
+                    task_id = make_task_id(
+                        library_name,
+                        backend_name,
+                        task_config,
+                    )
+                    if task_id not in completed_tasks:
+                        append_skipped_task(
+                            skipped_writer,
+                            skipped_file,
+                            completed_file,
+                            task_id,
+                            library_name,
+                            backend_name,
+                            task_config,
+                            reason,
+                        )
+                        completed_tasks.add(task_id)
+
+                blocks_writer.writerow({
+                    "block_id": block_id,
+                    "nominal_N": nominal_N,
+                    "final_N": candidate_N,
+                    "d": d,
+                    "m": m,
+                    "operation": operation,
+                    "backend": backend_name,
+                    "fastest_t_ms": "" if fastest_t_ms is None else fastest_t_ms,
+                })
+                blocks_file.flush()
+                os.fsync(blocks_file.fileno())
+                completed_blocks[block_id] = {
+                    "final_N": str(candidate_N),
+                }
+                previous_final_N[series_key] = candidate_N
+                progress.set_postfix_str("done", refresh=True)
+                progress.update(1)
+
+
 def run_orchestrator(
     config_path: Optional[Path] = None,
     resume_dir: Optional[Path] = None,
@@ -773,6 +1540,7 @@ def run_orchestrator(
         resume_dir: Existing run directory to continue
         registry_path: Optional library registry (default: config/libraries_registry.yaml)
     """
+    started_at = time.monotonic()
     if config_path is not None and resume_dir is not None:
         raise ValueError("config_path and resume_dir cannot be used together")
     if registry_path is not None and resume_dir is not None:
@@ -799,14 +1567,46 @@ def run_orchestrator(
     Ms = sweep.get("Ms", [2, 3, 4])
     path_kind = sweep.get("path_kind", "sin")
     operations = sweep.get("operations", ["signature", "logsignature"])
+    registered_libraries = registry.get("libraries", {})
+    selected_libraries = sweep.get("libraries")
+    if selected_libraries is None:
+        libraries = registered_libraries
+    else:
+        if not isinstance(selected_libraries, list) or not all(
+            isinstance(name, str) for name in selected_libraries
+        ):
+            raise ValueError("libraries must be a list of registry names")
+        if len(selected_libraries) != len(set(selected_libraries)):
+            raise ValueError("libraries must not contain duplicates")
+        unknown_libraries = [
+            name for name in selected_libraries if name not in registered_libraries
+        ]
+        if unknown_libraries:
+            raise ValueError(
+                "Unknown libraries in sweep: " + ", ".join(unknown_libraries)
+            )
+        libraries = {
+            name: registered_libraries[name]
+            for name in selected_libraries
+        }
     selected_backends = sweep.get("backends")
     if selected_backends is not None:
         selected_backends = {str(backend) for backend in selected_backends}
     repeats = sweep.get("repeats", 10)
+    warmup_iterations = int(sweep.get("warmup_iterations", 3))
+    if warmup_iterations < 0:
+        raise ValueError(
+            "warmup_iterations must be >= 0, "
+            f"got {warmup_iterations}"
+        )
     seed = int(sweep.get("seed", 0))
     batch_size = int(sweep.get("batch_size", 1))
     if batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+    adaptive_min_time_ms = sweep.get("adaptive_min_time_ms")
+    call_timeout_seconds = sweep.get("call_timeout_seconds")
+    if call_timeout_seconds is not None and float(call_timeout_seconds) <= 0:
+        raise ValueError("call_timeout_seconds must be > 0")
     runs_dir = REPO_ROOT / sweep.get("runs_dir", "runs")
 
     if resume_dir is None:
@@ -824,10 +1624,16 @@ def run_orchestrator(
     csv_path = run_dir / "results.csv"
     completed_path = run_dir / COMPLETED_TASKS_FILE
     skipped_path = run_dir / SKIPPED_TASKS_FILE
+    failed_path = run_dir / FAILED_TASKS_FILE
+    blocks_path = run_dir / ADAPTIVE_BLOCKS_FILE
     if resume_dir is None:
         initialize_results_csv(csv_path)
         initialize_skipped_tasks_csv(skipped_path)
+        initialize_failed_tasks_csv(failed_path)
+        if adaptive_min_time_ms is not None:
+            initialize_adaptive_blocks_csv(blocks_path)
         completed_tasks: set[str] = set()
+        completed_blocks: Dict[str, Dict[str, str]] = {}
     else:
         if not csv_path.exists():
             raise FileNotFoundError(f"Results file not found: {csv_path}")
@@ -841,6 +1647,20 @@ def run_orchestrator(
             )
         else:
             initialize_skipped_tasks_csv(skipped_path)
+        if failed_path.exists():
+            discard_uncommitted_rows(
+                failed_path,
+                completed_tasks,
+                FAILED_TASK_FIELDS,
+            )
+        else:
+            initialize_failed_tasks_csv(failed_path)
+        if adaptive_min_time_ms is not None:
+            if not blocks_path.exists():
+                initialize_adaptive_blocks_csv(blocks_path)
+            completed_blocks = load_adaptive_blocks(blocks_path)
+        else:
+            completed_blocks = {}
 
     print("\n" + "=" * 60)
     print("Signature Benchmark Orchestrator")
@@ -854,11 +1674,14 @@ def run_orchestrator(
         print(f"Backends: {sorted(selected_backends)}")
     print(f"Batch size: {batch_size}")
     print(f"Repeats: {repeats}")
+    print(f"Warmup iterations: {warmup_iterations}")
+    if adaptive_min_time_ms is not None:
+        print(f"Adaptive minimum time: {float(adaptive_min_time_ms):g} ms")
+    if call_timeout_seconds is not None:
+        print(f"Call timeout: {float(call_timeout_seconds):g} seconds")
     print(f"Seed: {seed}")
-    print(f"Libraries: {list(registry.get('libraries', {}).keys())}")
+    print(f"Libraries: {list(libraries)}")
     print("=" * 60)
-
-    libraries = registry.get("libraries", {})
 
     # Run benchmarks
     library_backends = {
@@ -869,12 +1692,71 @@ def run_orchestrator(
         ]
         for name, config in libraries.items()
     }
+    fixed_cases = build_sweep_cases(sweep, Ns, Ds, Ms, operations)
+    fixed_N_by_block = {
+        (case["d"], case["m"], case["operation"], case["backend"]): case["N"]
+        for case in fixed_cases
+        if case["backend"] is not None
+    }
+    if fixed_N_by_block:
+        configured_backends = {
+            backend.get("name", "")
+            for backends in library_backends.values()
+            for backend in backends
+        }
+        expected_blocks = {
+            (int(d), int(m), operation, backend_name)
+            for d in Ds
+            for m in Ms
+            for operation in operations
+            for backend_name in configured_backends
+        }
+        missing_blocks = expected_blocks - set(fixed_N_by_block)
+        extra_blocks = set(fixed_N_by_block) - expected_blocks
+        if missing_blocks or extra_blocks:
+            raise ValueError(
+                "path_lengths must define exactly one length for each "
+                "(d, m, operation, backend) block"
+            )
+        Ns = [0]
     backend_task_count = sum(len(backends) for backends in library_backends.values())
     total_tasks = len(Ns) * len(Ds) * len(Ms) * len(operations) * backend_task_count
+
+    if adaptive_min_time_ms is not None:
+        run_adaptive_tasks(
+            sweep=sweep,
+            libraries=libraries,
+            library_backends=library_backends,
+            Ns=Ns,
+            Ds=Ds,
+            Ms=Ms,
+            operations=operations,
+            path_kind=path_kind,
+            repeats=repeats,
+            batch_size=batch_size,
+            seed=seed,
+            run_dir=run_dir,
+            csv_path=csv_path,
+            completed_path=completed_path,
+            skipped_path=skipped_path,
+            failed_path=failed_path,
+            blocks_path=blocks_path,
+            completed_tasks=completed_tasks,
+            completed_blocks=completed_blocks,
+        )
+        record_run_completion(run_dir, time.monotonic() - started_at)
+        print("\n" + "=" * 60)
+        print("Benchmark complete!")
+        print(f"Results written to: {csv_path}")
+        print(f"Total benchmarks: {count_result_rows(csv_path)}")
+        print(f"Failed tasks: {count_result_rows(failed_path)}")
+        print("=" * 60)
+        return csv_path
 
     with (
         csv_path.open("a", newline="", encoding="utf-8") as results_file,
         skipped_path.open("a", newline="", encoding="utf-8") as skipped_file,
+        failed_path.open("a", newline="", encoding="utf-8") as failed_file,
         completed_path.open("a", encoding="utf-8") as completed_file,
         tqdm(
             total=total_tasks,
@@ -891,6 +1773,11 @@ def run_orchestrator(
         skipped_writer = csv.DictWriter(
             skipped_file,
             fieldnames=SKIPPED_TASK_FIELDS,
+            extrasaction="ignore",
+        )
+        failed_writer = csv.DictWriter(
+            failed_file,
+            fieldnames=FAILED_TASK_FIELDS,
             extrasaction="ignore",
         )
         for library_name, library_config in libraries.items():
@@ -913,11 +1800,15 @@ def run_orchestrator(
                     for d in Ds:
                         for m in Ms:
                             for operation in operations:
+                                case_N = fixed_N_by_block.get(
+                                    (int(d), int(m), operation, backend_name),
+                                    N,
+                                )
                                 task_label = format_task_label(
                                     library_name,
                                     backend_name,
                                     operation,
-                                    N=N,
+                                    N=case_N,
                                     d=d,
                                     m=m,
                                     batch_size=batch_size,
@@ -931,32 +1822,19 @@ def run_orchestrator(
                                     continue
 
                                 # Prepare task configuration
-                                task_config = {
-                                    "N": N,
-                                    "d": d,
-                                    "m": m,
-                                    "path_kind": path_kind,
-                                    "operation": operation,
-                                    "repeats": repeats,
-                                    "batch_size": batch_size,
-                                    "seed": seed,
-                                    "backend": backend_name,
-                                }
-                                for key in (
-                                    "logsig_method",
-                                    "log_sig_method",
-                                    "num_chunks",
-                                    "sig_kernel_order",
-                                    "sig_kernel_solver",
-                                    "sig_kernel_dyadic_order",
-                                    "sig_kernel_max_batch",
-                                ):
-                                    if key in sweep:
-                                        task_config[key] = sweep[key]
-                                library_task_config = (
-                                    sweep.get("library_configs", {}).get(library_name, {})
+                                task_config = build_task_config(
+                                    sweep,
+                                    library_name,
+                                    N=case_N,
+                                    d=d,
+                                    m=m,
+                                    path_kind=path_kind,
+                                    operation=operation,
+                                    repeats=repeats,
+                                    batch_size=batch_size,
+                                    seed=seed,
+                                    backend_name=backend_name,
                                 )
-                                task_config.update(library_task_config)
                                 task_id = make_task_id(
                                     library_name,
                                     backend_name,
@@ -1037,13 +1915,24 @@ def run_orchestrator(
                                         continue
 
                                     progress.set_postfix_str("failed", refresh=True)
+                                    append_failed_task(
+                                        failed_writer,
+                                        failed_file,
+                                        completed_file,
+                                        task_id,
+                                        library_name,
+                                        backend_name,
+                                        task_config,
+                                        e,
+                                    )
+                                    completed_tasks.add(task_id)
                                     _progress_write(
                                         f"Failed {task_label}: {e}",
                                         file=sys.stderr,
                                     )
                                     if python_worker is not None:
                                         python_worker.close()
-                                    raise
+                                    continue
                                 finally:
                                     progress.update(1)
 
@@ -1060,8 +1949,12 @@ def run_orchestrator(
     skipped_count = count_result_rows(skipped_path)
     if skipped_count:
         print(f"Unsupported tasks: {skipped_count} (see {skipped_path})")
+    failed_count = count_result_rows(failed_path)
+    if failed_count:
+        print(f"Failed tasks: {failed_count} (see {failed_path})")
     print("=" * 60)
 
+    record_run_completion(run_dir, time.monotonic() - started_at)
     return csv_path
 
 

@@ -62,6 +62,15 @@ class StochastaxAdapter(BenchmarkAdapter):
         dim = int(path.shape[-1])
         return self.jnp.zeros((*path.shape[:-2], steps, dim, dim), dtype=path.dtype)
 
+    def _vjp_kernel(self, function: Callable, path) -> Callable:
+        output, pullback = self.jax.vjp(function, path)
+        cotangent = self.jnp.asarray(
+            self.random_cotangent(output.shape),
+            dtype=output.dtype,
+        )
+        backprop_fn = self.jax.jit(lambda cotangent_arg: pullback(cotangent_arg)[0])
+        return lambda: backprop_fn(cotangent).block_until_ready()
+
     def run_signature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
         Prepare signature computation kernel.
@@ -107,9 +116,9 @@ class StochastaxAdapter(BenchmarkAdapter):
 
         return lambda: logsignature_fn(path_jax).block_until_ready()
 
-    def run_sigdiff(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
+    def run_sig_backprop(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
-        Prepare signature differentiation kernel.
+        Prepare signature backpropagation kernel.
 
         Returns a closure that performs only the kernel (no setup).
         """
@@ -120,16 +129,33 @@ class StochastaxAdapter(BenchmarkAdapter):
             sig = self.compute_path_signature(path_arg, m, hopf, mode="full").flatten()
             return sig
 
-        def loss_fn(path_arg):
-            if path_arg.ndim == 3:
-                sig = self.jax.vmap(signature_one)(path_arg)
-            else:
-                sig = signature_one(path_arg)
-            return self.jnp.sum(sig)
+        if path_jax.ndim == 3:
+            signature_fn = self.jax.vmap(signature_one)
+        else:
+            signature_fn = signature_one
+        return self._vjp_kernel(signature_fn, path_jax)
 
-        grad_fn = self.jax.jit(self.jax.grad(loss_fn))
+    def run_logsignature_backprop(
+        self, path: np.ndarray, d: int, m: int
+    ) -> Optional[Callable]:
+        path_jax = self._path_array(path)
+        hopf = self.ShuffleHopfAlgebra.build(d, m)
+        log_signature_type = self.log_signature_type
 
-        return lambda: grad_fn(path_jax).block_until_ready()
+        def logsignature_one(path_arg):
+            return self.compute_log_signature(
+                path_arg,
+                m,
+                hopf,
+                log_signature_type,
+                mode="full",
+            ).flatten()
+
+        if path_jax.ndim == 3:
+            logsignature_fn = self.jax.vmap(logsignature_one)
+        else:
+            logsignature_fn = logsignature_one
+        return self._vjp_kernel(logsignature_fn, path_jax)
 
     def run_branchedsignature(
         self,
@@ -178,6 +204,49 @@ class StochastaxAdapter(BenchmarkAdapter):
 
         return lambda: branchedsignature_fn(path_jax, cov_increments).block_until_ready()
 
+    def run_branchedsignature_backprop(
+        self,
+        path: np.ndarray,
+        d: int,
+        m: int,
+        *,
+        planar: bool,
+    ) -> Optional[Callable]:
+        path_jax = self._path_array(path)
+        cov_increments = self._zero_cov_increments(path_jax)
+        if planar:
+            hopf = self.MKWHopfAlgebra.build(d, m)
+
+            def branchedsignature_one(path_arg, cov_arg):
+                return self.compute_planar_branched_signature(
+                    path_arg,
+                    m,
+                    hopf,
+                    "full",
+                    cov_arg,
+                ).flatten()
+        else:
+            hopf = self.GLHopfAlgebra.build(d, m)
+
+            def branchedsignature_one(path_arg, cov_arg):
+                return self.compute_nonplanar_branched_signature(
+                    path_arg,
+                    m,
+                    hopf,
+                    "full",
+                    cov_arg,
+                ).flatten()
+
+        if path_jax.ndim == 3:
+            vmapped = self.jax.vmap(branchedsignature_one)
+            function = lambda path_arg: vmapped(path_arg, cov_increments)
+        else:
+            function = lambda path_arg: branchedsignature_one(
+                path_arg,
+                cov_increments,
+            )
+        return self._vjp_kernel(function, path_jax)
+
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
         # Generate path input during setup. Stochastax single-path APIs are
@@ -191,15 +260,34 @@ class StochastaxAdapter(BenchmarkAdapter):
         elif self.operation == "logsignature":
             kernel = self.run_logsignature(path, self.d, self.m)
             method = f"compute_log_signature({self.log_signature_type})"
-        elif self.operation == "sigdiff":
-            kernel = self.run_sigdiff(path, self.d, self.m)
-            method = "jax.grad(compute_path_signature)"
+        elif self.operation == "sig_backprop":
+            kernel = self.run_sig_backprop(path, self.d, self.m)
+            method = "vjp(compute_path_signature)"
+        elif self.operation == "logsignature_backprop":
+            kernel = self.run_logsignature_backprop(path, self.d, self.m)
+            method = f"vjp(compute_log_signature({self.log_signature_type}))"
         elif self.operation in ("branchedsignature", "branchedsignature_nonplanar"):
             kernel = self.run_branchedsignature(path, self.d, self.m, planar=False)
             method = "compute_nonplanar_branched_signature"
         elif self.operation == "branchedsignature_planar":
             kernel = self.run_branchedsignature(path, self.d, self.m, planar=True)
             method = "compute_planar_branched_signature"
+        elif self.operation == "branchedsignature_nonplanar_backprop":
+            kernel = self.run_branchedsignature_backprop(
+                path,
+                self.d,
+                self.m,
+                planar=False,
+            )
+            method = "vjp(compute_nonplanar_branched_signature)"
+        elif self.operation == "branchedsignature_planar_backprop":
+            kernel = self.run_branchedsignature_backprop(
+                path,
+                self.d,
+                self.m,
+                planar=True,
+            )
+            method = "vjp(compute_planar_branched_signature)"
         else:
             # Operation not supported
             return None

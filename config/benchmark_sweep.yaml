@@ -16,7 +16,7 @@ Ms: [2, 3]
 operations:
     - signature
     - logsignature
-    - sigdiff
+    - sig_backprop
     - branchedsignature_nonplanar
     - branchedsignature_planar
 

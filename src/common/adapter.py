@@ -27,6 +27,12 @@ _PREPARED_INPUTS: OrderedDict[tuple[str, int], tuple[np.ndarray, Any]] = Ordered
 _MAX_PREPARED_INPUTS = 8
 
 
+def clear_cached_inputs() -> None:
+    _load_stochastic_input.cache_clear()
+    _PREPARED_INPUTS.clear()
+    gc.collect()
+
+
 class BenchmarkAdapter:
     """
     Base class for benchmark adapters.
@@ -49,10 +55,12 @@ class BenchmarkAdapter:
                 - d: Dimension
                 - m: Signature truncation level
                 - path_kind: "linear", "sin", or "brownian"
-                - operation: "signature", "logsignature", "sigdiff",
+                - operation: "signature", "logsignature", "sig_backprop",
                   "branchedsignature_nonplanar", "branchedsignature_planar",
                   or "signaturekernel"
                 - repeats: Number of timing repetitions
+                - warmup_iterations: Number of untimed warmup iterations
+                - timing_statistic: Summary stored in t_ms ("median" or "min")
                 - batch_size: Number of paths per timed kernel call
                 - backend: Optional backend label, e.g. "cpu" or "gpu"
         """
@@ -65,12 +73,30 @@ class BenchmarkAdapter:
         self.repeats = config["repeats"]
         if self.repeats < 1:
             raise ValueError(f"repeats must be >= 1, got {self.repeats}")
+        self.warmup_iterations = int(config.get("warmup_iterations", 3))
+        if self.warmup_iterations < 0:
+            raise ValueError(
+                "warmup_iterations must be >= 0, "
+                f"got {self.warmup_iterations}"
+            )
+        self.timing_statistic = config.get("timing_statistic", "median")
+        if self.timing_statistic not in ("median", "min"):
+            raise ValueError(
+                "timing_statistic must be 'median' or 'min', "
+                f"got {self.timing_statistic!r}"
+            )
+        self.call_timeout_seconds = config.get("call_timeout_seconds")
+        self._call_event_callback = config.get("_call_event_callback")
         self.batch_size = int(config.get("batch_size", 1))
         if self.batch_size < 1:
             raise ValueError(f"batch_size must be >= 1, got {self.batch_size}")
         self.backend = config.get("backend", "")
         self.seed = int(config.get("seed", 0))
         self._input_index = 0
+
+    def random_cotangent(self, shape) -> np.ndarray:
+        rng = np.random.default_rng(self.seed)
+        return rng.standard_normal(tuple(shape)).astype(np.float32)
 
     def _cached_stochastic_input(self, logical_seed: int) -> Optional[np.ndarray]:
         """Load a saved stochastic input, or generate and save it atomically."""
@@ -106,7 +132,11 @@ class BenchmarkAdapter:
             os.replace(temporary_path, cache_path)
 
         if not checksum_path.exists():
-            digest = hashlib.sha256(cache_path.read_bytes()).hexdigest()
+            digest_builder = hashlib.sha256()
+            with cache_path.open("rb") as cache_file:
+                for chunk in iter(lambda: cache_file.read(1024 * 1024), b""):
+                    digest_builder.update(chunk)
+            digest = digest_builder.hexdigest()
             temporary_checksum = checksum_path.with_name(
                 f".{checksum_path.name}.{os.getpid()}.tmp"
             )
@@ -168,7 +198,7 @@ class BenchmarkAdapter:
     def manual_timing_loop(
         self,
         func: Callable[[], Any],
-        warmup_iterations: int = 3
+        warmup_iterations: Optional[int] = None,
     ) -> Tuple[float, int, List[float]]:
         """
         Execute manual timing loop with warmup and GC disabled.
@@ -178,14 +208,46 @@ class BenchmarkAdapter:
             warmup_iterations: Number of warmup runs before timing
 
         Returns:
-            Tuple of (median_time_ms, alloc_bytes, samples_ms):
-                - median_time_ms: Median time per iteration in milliseconds
+            Tuple of (summary_time_ms, alloc_bytes, samples_ms):
+                - summary_time_ms: Selected timing statistic in milliseconds
                 - alloc_bytes: Average net traced Python heap change per iteration
                 - samples_ms: Raw time for every measured iteration
         """
+        if warmup_iterations is None:
+            warmup_iterations = self.warmup_iterations
+        if warmup_iterations < 0:
+            raise ValueError(
+                "warmup_iterations must be >= 0, "
+                f"got {warmup_iterations}"
+            )
+
+        def invoke(phase: str, iteration: int) -> None:
+            if (
+                self._call_event_callback is not None
+                and self.call_timeout_seconds is not None
+            ):
+                self._call_event_callback({
+                    "status": "call_start",
+                    "phase": phase,
+                    "iteration": iteration,
+                    "timeout_seconds": self.call_timeout_seconds,
+                })
+            try:
+                func()
+            finally:
+                if (
+                    self._call_event_callback is not None
+                    and self.call_timeout_seconds is not None
+                ):
+                    self._call_event_callback({
+                        "status": "call_end",
+                        "phase": phase,
+                        "iteration": iteration,
+                    })
+
         # Warmup phase (untimed)
-        for _ in range(warmup_iterations):
-            func()
+        for iteration in range(warmup_iterations):
+            invoke("warmup", iteration)
 
         # Timed phase with GC disabled and allocation tracking
         gc.disable()
@@ -194,9 +256,9 @@ class BenchmarkAdapter:
             mem0_current, mem0_peak = tracemalloc.get_traced_memory()
 
             samples_ms = []
-            for _ in range(self.repeats):
+            for iteration in range(self.repeats):
                 t0 = time.perf_counter()
-                func()
+                invoke("measured", iteration)
                 samples_ms.append((time.perf_counter() - t0) * 1000.0)
 
             mem1_current, mem1_peak = tracemalloc.get_traced_memory()
@@ -204,14 +266,17 @@ class BenchmarkAdapter:
             tracemalloc.stop()
             gc.enable()
 
-        median_time_ms = statistics.median(samples_ms)
+        if self.timing_statistic == "min":
+            summary_time_ms = min(samples_ms)
+        else:
+            summary_time_ms = statistics.median(samples_ms)
 
         # This tracks only the net Python heap change visible to tracemalloc.
         # It excludes native allocations, framework pools, and device memory.
         total_alloc_bytes = mem1_current - mem0_current
         avg_alloc_bytes = total_alloc_bytes // self.repeats if self.repeats > 0 else 0
 
-        return median_time_ms, avg_alloc_bytes, samples_ms
+        return summary_time_ms, avg_alloc_bytes, samples_ms
 
     def run_signature(self, path, d: int, m: int) -> Optional[Callable]:
         """
@@ -247,9 +312,9 @@ class BenchmarkAdapter:
         """
         return None  # Default: not supported
 
-    def run_sigdiff(self, path, d: int, m: int) -> Optional[Callable]:
+    def run_sig_backprop(self, path, d: int, m: int) -> Optional[Callable]:
         """
-        Prepare and return kernel for signature differentiation.
+        Prepare and return a signature backpropagation kernel.
 
         This method should be overridden by subclasses to return a callable
         that performs only the kernel computation (no setup).
@@ -260,7 +325,7 @@ class BenchmarkAdapter:
             m: Signature level
 
         Returns:
-            Callable that performs the sigdiff computation, or None if not supported
+            Callable that performs signature backpropagation, or None if unsupported
         """
         return None  # Default: not supported
 
@@ -378,6 +443,7 @@ class BenchmarkAdapter:
             "library": library,
             "method": method,
             "path_type": path_type,
+            "timing_statistic": self.timing_statistic,
             "t_ms": t_ms,
             "t_ms_mean": statistics.fmean(samples_ms),
             "t_ms_std": statistics.pstdev(samples_ms),

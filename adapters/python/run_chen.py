@@ -86,9 +86,9 @@ class ChenSignaturesAdapter(BenchmarkAdapter):
 
         return lambda: [self.chen.logsig(sample, basis) for sample in paths]
 
-    def run_sigdiff(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
+    def run_sig_backprop(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
-        Prepare signature differentiation kernel.
+        Prepare signature backpropagation kernel.
 
         Returns a closure that performs only the kernel (no setup).
         """
@@ -100,12 +100,23 @@ class ChenSignaturesAdapter(BenchmarkAdapter):
             return None
 
         paths = self._path_batch(path)
+        path_t = torch.tensor(paths, dtype=torch.float32, requires_grad=True)
+        outputs = tuple(sig_torch(sample, m) for sample in path_t)
+        cotangents = tuple(
+            torch.as_tensor(
+                self.random_cotangent(tuple(output.shape)),
+                dtype=output.dtype,
+            )
+            for output in outputs
+        )
 
-        # Rebuild the autograd graph for every repetition.
         def kernel():
-            path_t = torch.tensor(paths, dtype=torch.float32, requires_grad=True)
-            loss = sum(sig_torch(sample, m).sum() for sample in path_t)
-            loss.backward()
+            return torch.autograd.grad(
+                outputs,
+                path_t,
+                cotangents,
+                retain_graph=True,
+            )
 
         return kernel
 
@@ -123,9 +134,9 @@ class ChenSignaturesAdapter(BenchmarkAdapter):
             kernel = self.run_logsignature(path, self.d, self.m)
             method = "logsig(prepared,batch_loop)"
             path_type = "ndarray"
-        elif self.operation == "sigdiff":
-            kernel = self.run_sigdiff(path, self.d, self.m)
-            method = "sigdiff(batch_loop)"
+        elif self.operation == "sig_backprop":
+            kernel = self.run_sig_backprop(path, self.d, self.m)
+            method = "signature.backward(random_cotangent,batch_loop)"
             path_type = "torch"
         else:
             # Operation not supported

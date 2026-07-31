@@ -244,10 +244,36 @@ class TestPathGeneration:
             "path_kind": "linear",
             "operation": "signature",
             "repeats": 3,
+            "warmup_iterations": 1,
         })
 
-        median_ms, alloc_bytes, samples_ms = adapter.manual_timing_loop(lambda: None)
+        calls = []
+        median_ms, alloc_bytes, samples_ms = adapter.manual_timing_loop(
+            lambda: calls.append(None)
+        )
 
+        assert len(calls) == 4
         assert len(samples_ms) == 3
         assert median_ms == np.median(samples_ms)
         assert alloc_bytes >= 0
+
+    def test_timing_loop_can_select_minimum_sample(self):
+        adapter = BenchmarkAdapter({
+            "N": 4,
+            "d": 2,
+            "m": 2,
+            "path_kind": "linear",
+            "operation": "signature",
+            "repeats": 3,
+            "warmup_iterations": 1,
+            "timing_statistic": "min",
+        })
+
+        calls = []
+        minimum_ms, _, samples_ms = adapter.manual_timing_loop(
+            lambda: calls.append(None)
+        )
+
+        assert len(calls) == 4
+        assert len(samples_ms) == 3
+        assert minimum_ms == min(samples_ms)

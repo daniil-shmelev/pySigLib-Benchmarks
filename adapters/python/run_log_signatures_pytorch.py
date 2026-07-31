@@ -76,14 +76,39 @@ class LogSignaturesPyTorchAdapter(BenchmarkAdapter):
             path,
         )
 
-    def run_sigdiff(self, path: np.ndarray, d: int, m: int) -> Callable:
+    def run_sig_backprop(self, path: np.ndarray, d: int, m: int) -> Callable:
+        path = self._path_tensor(path)
+        output, pullback = self.torch.func.vjp(
+            lambda path_arg: self.signature(path_arg, depth=m),
+            path,
+        )
+        cotangent = self.torch.as_tensor(
+            self.random_cotangent(tuple(output.shape)),
+            dtype=output.dtype,
+            device=output.device,
+        )
+        return self._prepare(lambda cotangent_arg: pullback(cotangent_arg)[0], cotangent)
+
+    def run_logsignature_backprop(
+        self, path: np.ndarray, d: int, m: int
+    ) -> Callable:
         path = self._path_tensor(path)
 
-        def loss(path_arg):
-            return self.signature(path_arg, depth=m).sum()
+        def logsignature_fn(path_arg):
+            return self.log_signature(
+                path_arg,
+                depth=m,
+                method="default",
+                mode="words",
+            )
 
-        gradient = self.torch.func.grad(loss)
-        return self._prepare(gradient, path)
+        output, pullback = self.torch.func.vjp(logsignature_fn, path)
+        cotangent = self.torch.as_tensor(
+            self.random_cotangent(tuple(output.shape)),
+            dtype=output.dtype,
+            device=output.device,
+        )
+        return self._prepare(lambda cotangent_arg: pullback(cotangent_arg)[0], cotangent)
 
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         path = self.make_path_input()
@@ -93,9 +118,12 @@ class LogSignaturesPyTorchAdapter(BenchmarkAdapter):
         elif self.operation == "logsignature":
             kernel = self.run_logsignature(path, self.d, self.m)
             method = "log_signature(default,words)"
-        elif self.operation == "sigdiff":
-            kernel = self.run_sigdiff(path, self.d, self.m)
-            method = "torch.func.grad(signature)"
+        elif self.operation == "sig_backprop":
+            kernel = self.run_sig_backprop(path, self.d, self.m)
+            method = "torch.func.vjp(signature)"
+        elif self.operation == "logsignature_backprop":
+            kernel = self.run_logsignature_backprop(path, self.d, self.m)
+            method = "torch.func.vjp(log_signature(default,words))"
         else:
             return None
 

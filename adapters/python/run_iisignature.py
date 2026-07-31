@@ -53,6 +53,30 @@ class IISignatureAdapter(BenchmarkAdapter):
         # Return kernel closure
         return lambda: self.iisignature.logsig(path, basis, self.logsig_method)
 
+    def run_sig_backprop(
+        self, path: np.ndarray, d: int, m: int
+    ) -> Optional[Callable]:
+        path = np.ascontiguousarray(path, dtype=np.float32)
+        output = self.iisignature.sig(path, m)
+        cotangent = self.random_cotangent(output.shape)
+        return lambda: self.iisignature.sigbackprop(cotangent, path, m)
+
+    def run_logsignature_backprop(
+        self, path: np.ndarray, d: int, m: int
+    ) -> Optional[Callable]:
+        if d < 2:
+            return None
+        path = np.ascontiguousarray(path, dtype=np.float32)
+        basis = self.iisignature.prepare(d, m, self.logsig_method)
+        output = self.iisignature.logsig(path, basis, self.logsig_method)
+        cotangent = self.random_cotangent(output.shape)
+        return lambda: self.iisignature.logsigbackprop(
+            cotangent,
+            path,
+            basis,
+            self.logsig_method,
+        )
+
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
         # Generate path input during setup. When batch_size > 1 this has shape
@@ -66,6 +90,12 @@ class IISignatureAdapter(BenchmarkAdapter):
         elif self.operation == "logsignature":
             kernel = self.run_logsignature(path, self.d, self.m)
             method = f"logsig({self.logsig_method})"
+        elif self.operation == "sig_backprop":
+            kernel = self.run_sig_backprop(path, self.d, self.m)
+            method = "sigbackprop"
+        elif self.operation == "logsignature_backprop":
+            kernel = self.run_logsignature_backprop(path, self.d, self.m)
+            method = f"logsigbackprop({self.logsig_method})"
         else:
             # Operation not supported
             return None

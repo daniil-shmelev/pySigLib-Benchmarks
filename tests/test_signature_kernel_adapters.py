@@ -80,3 +80,65 @@ def test_pysiglib_signaturekernel_matches_jax_api():
     assert got.dtype == np.float32
     assert got.shape == (2, 2)
     np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_polysigkernel_backprop_matches_direct_vjp():
+    pytest.importorskip("jax")
+    pytest.importorskip("polysigkernel")
+
+    adapter = PolySigKernelAdapter(_config("signaturekernel_backprop"))
+    path1 = _path_batch()
+    path2 = _path_batch() + 0.2
+    got = np.asarray(
+        adapter.run_signaturekernel_backprop(path1, path2, 2, 2)()
+    )
+
+    X = adapter._path_batch(path1)
+    Y = adapter._path_batch(path2)
+    sig_kernel = adapter.SigKernel_polynomial(
+        order=2,
+        static_kernel="linear",
+        solver=adapter.solver,
+        add_time=False,
+    )
+    output, pullback = adapter.jax.vjp(
+        lambda X_arg: sig_kernel.kernel_matrix(X_arg, Y),
+        X,
+    )
+    cotangent = adapter.jnp.asarray(
+        adapter.random_cotangent(output.shape),
+        dtype=output.dtype,
+    )
+    expected = np.asarray(pullback(cotangent)[0])
+
+    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+
+def test_pysiglib_signaturekernel_backprop_matches_direct_vjp():
+    pytest.importorskip("jax")
+    pytest.importorskip("pysiglib.jax_api")
+
+    adapter = PySigLibAdapter(_config("signaturekernel_backprop"))
+    path1 = _path_batch()
+    path2 = _path_batch() + 0.2
+    got = np.asarray(
+        adapter.run_signaturekernel_backprop(path1, path2, 2, 2)()
+    )
+
+    X = adapter._path_array(path1)
+    Y = adapter._path_array(path2)
+    output, pullback = adapter.jax.vjp(
+        lambda X_arg: adapter.pysiglib.sig_kernel_gram(
+            X_arg,
+            Y,
+            dyadic_order=2,
+        ),
+        X,
+    )
+    cotangent = adapter.jnp.asarray(
+        adapter.random_cotangent(output.shape),
+        dtype=output.dtype,
+    )
+    expected = np.asarray(pullback(cotangent)[0])
+
+    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)

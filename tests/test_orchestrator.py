@@ -162,9 +162,43 @@ def test_worker_parser_accepts_protocol_after_unterminated_diagnostic():
 
     worker = orchestrator.PythonAdapterWorker("example", {})
     worker.process = FakeProcess()
+    worker._output_queue = orchestrator.queue.Queue()
+    worker._output_queue.put(stdout.readline())
 
     assert worker._read_response() == response
     assert worker.diagnostics == ["native diagnostic"]
+
+
+def test_worker_times_out_an_active_kernel_call(monkeypatch):
+    class FakeProcess:
+        @staticmethod
+        def poll():
+            return None
+
+    worker = orchestrator.PythonAdapterWorker("example", {})
+    worker.process = FakeProcess()
+    worker._output_queue = orchestrator.queue.Queue()
+    worker._output_queue.put(
+        orchestrator.PYTHON_WORKER_PROTOCOL_PREFIX
+        + json.dumps({
+            "status": "call_start",
+            "phase": "measured",
+            "iteration": 0,
+            "timeout_seconds": 0.01,
+        })
+        + "\n"
+    )
+    killed = []
+    monkeypatch.setattr(
+        worker,
+        "_kill_process_tree",
+        lambda: killed.append(True),
+    )
+
+    with pytest.raises(orchestrator.BenchmarkCallTimeout):
+        worker._read_response()
+
+    assert killed == [True]
 
 
 def test_shape_scoped_worker_reuses_only_matching_shapes():
@@ -232,6 +266,247 @@ def test_orchestrator_passes_one_worker_to_all_backend_tasks(tmp_path, monkeypat
     assert workers[0] is workers[1]
 
 
+def test_orchestrator_uses_fixed_path_length_per_block(tmp_path, monkeypatch):
+    sweep_path = tmp_path / "sweep.yaml"
+    sweep_path.write_text(
+        "\n".join([
+            "path_kind: sin",
+            "Ns: [4, 8]",
+            "Ds: [2]",
+            "Ms: [2]",
+            "operations: [signature, logsignature]",
+            "backends: [cpu]",
+            "path_lengths:",
+            "  - d: 2",
+            "    m: 2",
+            "    operation: signature",
+            "    backends: {cpu: 32}",
+            "  - d: 2",
+            "    m: 2",
+            "    operation: logsignature",
+            "    backends: {cpu: 64}",
+            "batch_size: 1",
+            "repeats: 1",
+            "runs_dir: runs",
+        ]),
+        encoding="utf-8",
+    )
+    registry_path = tmp_path / "registry.yaml"
+    registry_path.write_text(
+        "\n".join([
+            "libraries:",
+            "  example:",
+            "    type: python",
+            "    script: adapter.py",
+            "    operations: [signature, logsignature]",
+            "    backends:",
+            "      - name: cpu",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orchestrator, "REPO_ROOT", tmp_path)
+    calls = []
+
+    def fake_adapter(library_name, library_config, task_config, **kwargs):
+        calls.append((task_config["operation"], task_config["N"]))
+        return _result(task_config)
+
+    monkeypatch.setattr(orchestrator, "run_python_adapter", fake_adapter)
+    orchestrator.run_orchestrator(sweep_path, registry_path=registry_path)
+
+    assert calls == [("signature", 32), ("logsignature", 64)]
+
+
+def test_orchestrator_runs_only_selected_libraries(tmp_path, monkeypatch):
+    sweep_path = tmp_path / "sweep.yaml"
+    sweep_path.write_text(
+        "\n".join([
+            "path_kind: sin",
+            "libraries: [selected]",
+            "Ns: [4]",
+            "Ds: [2]",
+            "Ms: [2]",
+            "operations: [signature]",
+            "batch_size: 1",
+            "repeats: 1",
+            "runs_dir: runs",
+        ]),
+        encoding="utf-8",
+    )
+    registry_path = tmp_path / "registry.yaml"
+    registry_path.write_text(
+        "\n".join([
+            "libraries:",
+            "  selected:",
+            "    type: python",
+            "    script: selected.py",
+            "    operations: [signature]",
+            "  excluded:",
+            "    type: python",
+            "    script: excluded.py",
+            "    operations: [signature]",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orchestrator, "REPO_ROOT", tmp_path)
+    calls = []
+
+    def fake_adapter(library_name, library_config, task_config, **kwargs):
+        calls.append(library_name)
+        return _result(task_config)
+
+    monkeypatch.setattr(orchestrator, "run_python_adapter", fake_adapter)
+    orchestrator.run_orchestrator(sweep_path, registry_path=registry_path)
+
+    assert calls == ["selected"]
+
+
+def test_adaptive_sweep_uses_common_path_length(tmp_path, monkeypatch):
+    sweep_path = tmp_path / "sweep.yaml"
+    sweep_path.write_text(
+        "\n".join([
+            "path_kind: sin",
+            "Ns: [4]",
+            "Ds: [2]",
+            "Ms: [2]",
+            "operations: [signature]",
+            "backends: [cpu]",
+            "batch_size: 1",
+            "repeats: 3",
+            "warmup_iterations: 1",
+            "timing_statistic: min",
+            "adaptive_min_time_ms: 100",
+            "adaptive_growth_factor: 2",
+            "runs_dir: runs",
+        ]),
+        encoding="utf-8",
+    )
+    registry_path = tmp_path / "registry.yaml"
+    registry_path.write_text(
+        "\n".join([
+            "libraries:",
+            "  fast:",
+            "    type: python",
+            "    script: fast.py",
+            "    backend: cpu",
+            "    operations: [signature]",
+            "  slow:",
+            "    type: python",
+            "    script: slow.py",
+            "    backend: cpu",
+            "    operations: [signature]",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orchestrator, "REPO_ROOT", tmp_path)
+    calls = []
+
+    def fake_adapter(library_name, library_config, task_config, **kwargs):
+        calls.append((library_name, task_config["N"]))
+        multiplier = 10 if library_name == "fast" else 20
+        t_ms = task_config["N"] * multiplier
+        return {
+            **_result(task_config),
+            "library": library_name,
+            "t_ms": t_ms,
+            "t_ms_mean": t_ms,
+            "samples_ms": [t_ms] * 3,
+        }
+
+    monkeypatch.setattr(orchestrator, "run_python_adapter", fake_adapter)
+    csv_path = orchestrator.run_orchestrator(
+        sweep_path,
+        registry_path=registry_path,
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as results_file:
+        rows = list(csv.DictReader(results_file))
+    with (
+        csv_path.parent / orchestrator.ADAPTIVE_BLOCKS_FILE
+    ).open(newline="", encoding="utf-8") as blocks_file:
+        blocks = list(csv.DictReader(blocks_file))
+
+    assert calls == [
+        ("fast", 4),
+        ("fast", 12),
+        ("slow", 4),
+        ("slow", 8),
+        ("slow", 12),
+    ]
+    assert {int(row["N"]) for row in rows} == {12}
+    assert min(float(row["t_ms"]) for row in rows) >= 100
+    assert blocks[0]["nominal_N"] == "4"
+    assert blocks[0]["final_N"] == "12"
+
+
+def test_adaptive_sweep_records_oom_and_continues(tmp_path, monkeypatch):
+    sweep_path = tmp_path / "sweep.yaml"
+    sweep_path.write_text(
+        "\n".join([
+            "path_kind: sin",
+            "Ns: [4]",
+            "Ds: [2]",
+            "Ms: [2]",
+            "operations: [signature]",
+            "backends: [cpu]",
+            "batch_size: 1",
+            "repeats: 3",
+            "adaptive_min_time_ms: 100",
+            "runs_dir: runs",
+        ]),
+        encoding="utf-8",
+    )
+    registry_path = tmp_path / "registry.yaml"
+    registry_path.write_text(
+        "\n".join([
+            "libraries:",
+            "  healthy:",
+            "    type: python",
+            "    script: healthy.py",
+            "    backend: cpu",
+            "    operations: [signature]",
+            "  oom:",
+            "    type: python",
+            "    script: oom.py",
+            "    backend: cpu",
+            "    operations: [signature]",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orchestrator, "REPO_ROOT", tmp_path)
+
+    def fake_adapter(library_name, library_config, task_config, **kwargs):
+        if library_name == "oom":
+            raise MemoryError("out of memory")
+        t_ms = task_config["N"] * 30
+        return {
+            **_result(task_config),
+            "library": library_name,
+            "t_ms": t_ms,
+            "t_ms_mean": t_ms,
+            "samples_ms": [t_ms] * 3,
+        }
+
+    monkeypatch.setattr(orchestrator, "run_python_adapter", fake_adapter)
+    csv_path = orchestrator.run_orchestrator(
+        sweep_path,
+        registry_path=registry_path,
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as results_file:
+        rows = list(csv.DictReader(results_file))
+    with (
+        csv_path.parent / orchestrator.FAILED_TASKS_FILE
+    ).open(newline="", encoding="utf-8") as failed_file:
+        failures = list(csv.DictReader(failed_file))
+
+    assert len(rows) == 1
+    assert rows[0]["library"] == "healthy"
+    assert failures[0]["library"] == "oom"
+    assert failures[0]["error_type"] == "MemoryError"
+    assert failures[0]["reason"] == "out of memory"
+
+
 def test_compatibility_wheel_is_installed_once(tmp_path, monkeypatch):
     packages_dir = tmp_path / "adapter-packages"
     monkeypatch.setattr(
@@ -286,13 +561,13 @@ def _result(task_config):
     }
 
 
-def test_failed_run_appends_results_and_resumes_missing_tasks(tmp_path, monkeypatch):
+def test_failed_task_is_recorded_and_not_retried(tmp_path, monkeypatch):
     sweep_path = tmp_path / "sweep.yaml"
     sweep_path.write_text(
         "\n".join([
             "path_kind: sin",
             "seed: 1",
-            "Ns: [4, 8]",
+            "Ns: [4, 8, 16]",
             "Ds: [2]",
             "Ms: [2]",
             "operations: [signature]",
@@ -327,15 +602,23 @@ def test_failed_run_appends_results_and_resumes_missing_tasks(tmp_path, monkeypa
 
     monkeypatch.setattr(orchestrator, "run_python_adapter", fail_second_task)
 
-    with pytest.raises(RuntimeError, match="adapter failed"):
-        orchestrator.run_orchestrator(sweep_path)
+    orchestrator.run_orchestrator(sweep_path)
 
     run_dir = next((tmp_path / "runs").iterdir())
     csv_path = run_dir / "results.csv"
     with csv_path.open(newline="", encoding="utf-8") as results_file:
-        first_rows = list(csv.DictReader(results_file))
-    assert first_calls == [4, 8]
-    assert [int(row["N"]) for row in first_rows] == [4]
+        result_rows = list(csv.DictReader(results_file))
+    with (
+        run_dir / orchestrator.FAILED_TASKS_FILE
+    ).open(newline="", encoding="utf-8") as failed_file:
+        failed_rows = list(csv.DictReader(failed_file))
+
+    assert first_calls == [4, 8, 16]
+    assert [int(row["N"]) for row in result_rows] == [4, 16]
+    assert [int(row["N"]) for row in failed_rows] == [8]
+    assert failed_rows[0]["error_type"] == "RuntimeError"
+    assert failed_rows[0]["reason"] == "adapter failed"
+    assert len((run_dir / orchestrator.COMPLETED_TASKS_FILE).read_text().splitlines()) == 3
 
     resumed_calls = []
 
@@ -348,9 +631,8 @@ def test_failed_run_appends_results_and_resumes_missing_tasks(tmp_path, monkeypa
 
     with csv_path.open(newline="", encoding="utf-8") as results_file:
         final_rows = list(csv.DictReader(results_file))
-    assert resumed_calls == [8]
-    assert [int(row["N"]) for row in final_rows] == [4, 8]
-    assert len((run_dir / orchestrator.COMPLETED_TASKS_FILE).read_text().splitlines()) == 2
+    assert resumed_calls == []
+    assert [int(row["N"]) for row in final_rows] == [4, 16]
 
 
 def test_unsupported_task_is_recorded_and_not_retried(tmp_path, monkeypatch):
