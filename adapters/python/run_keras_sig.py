@@ -36,6 +36,7 @@ class KerasSigAdapter(BenchmarkAdapter):
 
     def _path_array(self, path: np.ndarray):
         """Convert path data to a batched contiguous JAX array during setup."""
+        source_path = path
         if path.ndim == 2:
             path = path[None, :, :]
         elif path.ndim != 3:
@@ -43,7 +44,11 @@ class KerasSigAdapter(BenchmarkAdapter):
                 f"path must have shape (N, d) or (batch_size, N, d), got {path.shape}"
             )
         path_np = np.ascontiguousarray(path, dtype=np.float32)
-        return self.jnp.asarray(path_np, dtype=self.jnp.float32)
+        return self.cached_prepared_input(
+            "keras-sig.jax",
+            source_path,
+            lambda: self.jnp.asarray(path_np, dtype=self.jnp.float32),
+        )
 
     def run_signature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """

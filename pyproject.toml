@@ -36,6 +36,7 @@ pathsig = [
     "torch>=2.4",
 ]
 pysiglib = [
+    "jax[cuda13]; sys_platform == 'linux'",
     "pysiglib[cuda]>=3.0.3",
 ]
 stochastax = [
@@ -78,6 +79,9 @@ all = [
 ]
 
 [tool.uv.sources]
+torch = [
+    { index = "pytorch-cu130", marker = "sys_platform == 'win32'" },
+]
 stochastax = { git = "https://github.com/luke-a-thompson/Stochastax.git", rev = "09c9612e9352bb05a0a92a30e2bc391cdd2c78e1" }
 keras_sig = { git = "https://github.com/remigenet/keras_sig.git", rev = "32367ad019ede3c31c2b6f3a1197090696d4a8eb" }
 signax = { git = "https://github.com/anh-tong/signax", rev = "4961f361b60d293f4e7679dba028b93dead89c39" }
@@ -89,3 +93,8 @@ iisignature = ["numpy"]
 
 [tool.uv]
 no-build-isolation-package = ["pathsig"]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true

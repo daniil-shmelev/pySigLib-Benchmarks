@@ -159,6 +159,8 @@ class TestPathGeneration:
 
         np.testing.assert_array_equal(first_x, second_x)
         np.testing.assert_array_equal(first_y, second_y)
+        assert first_x is second_x
+        assert first_y is second_y
         assert not np.array_equal(first_x, first_y)
 
         cache_files = sorted(tmp_path.glob("*.npy"))
@@ -171,6 +173,38 @@ class TestPathGeneration:
                 encoding="utf-8"
             )
             assert checksum == f"{digest}  {cache_path.name}\n"
+
+    def test_prepared_inputs_are_reused_by_namespace(self):
+        adapter = BenchmarkAdapter({
+            "N": 4,
+            "d": 2,
+            "m": 2,
+            "path_kind": "linear",
+            "operation": "signature",
+            "repeats": 1,
+        })
+        path = np.zeros((4, 2), dtype=np.float32)
+        calls = []
+
+        first = adapter.cached_prepared_input(
+            "test",
+            path,
+            lambda: calls.append("first") or object(),
+        )
+        second = adapter.cached_prepared_input(
+            "test",
+            path,
+            lambda: calls.append("second") or object(),
+        )
+        different = adapter.cached_prepared_input(
+            "other",
+            path,
+            lambda: calls.append("different") or object(),
+        )
+
+        assert first is second
+        assert different is not first
+        assert calls == ["first", "different"]
 
     def test_timing_loop_retains_raw_samples(self):
         adapter = BenchmarkAdapter({

@@ -35,8 +35,15 @@ class LogSignaturesPyTorchAdapter(BenchmarkAdapter):
             device = "cuda"
         else:
             device = "cpu"
-        path = np.ascontiguousarray(path, dtype=np.float32)
-        return self.torch.as_tensor(path, dtype=self.torch.float32, device=device)
+        return self.cached_prepared_input(
+            f"log-signatures-pytorch.{device}",
+            path,
+            lambda: self.torch.as_tensor(
+                np.ascontiguousarray(path, dtype=np.float32),
+                dtype=self.torch.float32,
+                device=device,
+            ),
+        )
 
     def _prepare(self, function: Callable[[Any], Any], path: Any) -> Callable[[], Any]:
         if self.backend == "gpu":

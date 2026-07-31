@@ -23,6 +23,8 @@ from tqdm import tqdm
 SRC_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SRC_DIR.parent
 COMPATIBILITY_PACKAGES_DIR = REPO_ROOT / ".adapter_packages"
+PYTHON_ADAPTER_WORKER = SRC_DIR / "python_adapter_worker.py"
+PYTHON_WORKER_PROTOCOL_PREFIX = "__PYSIGLIB_BENCHMARK_WORKER__"
 
 # Configuration paths
 CONFIG_DIR = REPO_ROOT / "config"
@@ -443,13 +445,195 @@ def backend_variants(library_config: Dict[str, Any]) -> List[Dict[str, Any]]:
     return normalized
 
 
+def prepare_python_adapter_process(
+    library_name: str,
+    library_config: Dict[str, Any],
+    env_overrides: Optional[Dict[str, str]],
+) -> tuple[Path, List[str], Dict[str, str]]:
+    script_path = REPO_ROOT / library_config["script"]
+    extras = list(library_config.get("extras", []))
+    deps = library_config.get("deps", [])
+    env = os.environ.copy()
+    if env_overrides:
+        env.update({
+            key: str(value)
+            .replace("{repo_root}/", str(REPO_ROOT) + os.sep)
+            .replace("{repo_root}\\", str(REPO_ROOT) + os.sep)
+            .replace("{repo_root}", str(REPO_ROOT))
+            for key, value in env_overrides.items()
+        })
+
+    compatibility_path = ensure_compatibility_wheel(
+        library_name,
+        library_config,
+        extras,
+        env,
+    )
+    if compatibility_path is not None:
+        pythonpath = [str(compatibility_path)]
+        if env.get("PYTHONPATH"):
+            pythonpath.append(env["PYTHONPATH"])
+        env["PYTHONPATH"] = os.pathsep.join(pythonpath)
+
+    command = ["uv", "run"]
+    for extra in extras:
+        command.extend(["--extra", extra])
+    for dep in deps:
+        command.extend(["--with", dep])
+    return script_path, command, env
+
+
+class PythonAdapterWorker:
+    """Run every task for one Python library/backend in one process."""
+
+    def __init__(
+        self,
+        library_name: str,
+        library_config: Dict[str, Any],
+        env_overrides: Optional[Dict[str, str]] = None,
+    ):
+        self.library_name = library_name
+        self.library_config = library_config
+        self.env_overrides = env_overrides
+        self.process = None
+        self.diagnostics: List[str] = []
+        self.scope = library_config.get("worker_scope")
+        self.scope_key = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback_value):
+        self.close()
+
+    def _read_response(self) -> Dict[str, Any]:
+        if self.process is None or self.process.stdout is None:
+            raise RuntimeError(f"{self.library_name}: worker is not running")
+
+        while True:
+            line = self.process.stdout.readline()
+            if line == "":
+                return_code = self.process.poll()
+                details = "\n".join(self.diagnostics[-20:])
+                raise RuntimeError(
+                    f"{self.library_name}: worker exited with code {return_code}"
+                    + (f"\n{details}" if details else "")
+                )
+            line = line.rstrip("\r\n")
+            protocol_index = line.find(PYTHON_WORKER_PROTOCOL_PREFIX)
+            if protocol_index >= 0:
+                diagnostic = line[:protocol_index]
+                if diagnostic:
+                    self.diagnostics.append(diagnostic)
+                payload = line[protocol_index + len(PYTHON_WORKER_PROTOCOL_PREFIX):]
+                return json.loads(payload)
+            if line:
+                self.diagnostics.append(line)
+
+    def _start(self) -> None:
+        if self.process is not None:
+            return
+        script_path, command, env = prepare_python_adapter_process(
+            self.library_name,
+            self.library_config,
+            self.env_overrides,
+        )
+        command.extend([
+            "python",
+            str(PYTHON_ADAPTER_WORKER),
+            str(script_path),
+        ])
+        self.process = subprocess.Popen(
+            command,
+            cwd=REPO_ROOT,
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+        response = self._read_response()
+        if response.get("status") != "ready":
+            raise RuntimeError(
+                f"{self.library_name}: worker startup failed: "
+                f"{response.get('error', response)}\n"
+                f"{response.get('traceback', '')}"
+            )
+        if self.scope is None:
+            self.scope = response.get("worker_scope", "backend")
+
+    def _task_scope_key(self, task_config: Dict[str, Any]) -> tuple:
+        if self.scope == "backend" or self.scope is None:
+            return ("backend",)
+        if self.scope == "shape":
+            return (
+                "shape",
+                task_config["N"],
+                task_config["d"],
+                task_config.get("batch_size", 1),
+                task_config.get("path_kind", ""),
+                task_config.get("seed", 0),
+            )
+        if self.scope == "task":
+            return ("task", json.dumps(task_config, sort_keys=True))
+        raise ValueError(
+            f"{self.library_name}: invalid worker_scope {self.scope!r}"
+        )
+
+    def run(self, task_config: Dict[str, Any]) -> Any:
+        if (
+            self.process is not None
+            and self.scope_key != self._task_scope_key(task_config)
+        ):
+            self.close()
+        self._start()
+        if self.scope_key is None:
+            self.scope_key = self._task_scope_key(task_config)
+        if self.process is None or self.process.stdin is None:
+            raise RuntimeError(f"{self.library_name}: worker is not running")
+        self.process.stdin.write(json.dumps(task_config) + "\n")
+        self.process.stdin.flush()
+        response = self._read_response()
+        status = response.get("status")
+        if status == "result":
+            return response.get("result")
+        raise RuntimeError(
+            f"{self.library_name}: adapter task failed: "
+            f"{response.get('error', response)}\n"
+            f"{response.get('traceback', '')}"
+        )
+
+    def close(self) -> None:
+        if self.process is None:
+            return
+        if self.process.stdin is not None:
+            self.process.stdin.close()
+        try:
+            self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+        if self.process.stdout is not None:
+            self.process.stdout.close()
+        self.process = None
+        self.scope_key = None
+
+
 def run_python_adapter(
     library_name: str,
     library_config: Dict[str, Any],
     task_config: Dict[str, Any],
     *,
     env_overrides: Optional[Dict[str, str]] = None,
-) -> Dict[str, Any]:
+    worker: Optional[PythonAdapterWorker] = None,
+) -> Any:
     """
     Run a Python adapter using uv with project extras.
 
@@ -461,37 +645,15 @@ def run_python_adapter(
     Returns:
         Benchmark result dictionary
     """
-    script_path = REPO_ROOT / library_config["script"]
-    extras = list(library_config.get("extras", []))
-    deps = library_config.get("deps", [])
+    if worker is not None:
+        return worker.run(task_config)
 
     try:
-        env = os.environ.copy()
-        if env_overrides:
-            env.update({
-                key: str(value).replace("{repo_root}", str(REPO_ROOT))
-                for key, value in env_overrides.items()
-            })
-
-        compatibility_path = ensure_compatibility_wheel(
+        script_path, cmd, env = prepare_python_adapter_process(
             library_name,
             library_config,
-            extras,
-            env,
+            env_overrides,
         )
-        if compatibility_path is not None:
-            pythonpath = [str(compatibility_path)]
-            if env.get("PYTHONPATH"):
-                pythonpath.append(env["PYTHONPATH"])
-            env["PYTHONPATH"] = os.pathsep.join(pythonpath)
-
-        # Build uv command with project optional dependencies. Adapters add
-        # src/ to sys.path themselves.
-        cmd = ["uv", "run"]
-        for extra in extras:
-            cmd.extend(["--extra", extra])
-        for dep in deps:  # Legacy support for older registry entries.
-            cmd.extend(["--with", dep])
         cmd.extend(["python", str(script_path), json.dumps(task_config)])
 
         stdout = run_subprocess_capture(cmd, env=env)
@@ -601,6 +763,7 @@ def format_task_label(
 def run_orchestrator(
     config_path: Optional[Path] = None,
     resume_dir: Optional[Path] = None,
+    registry_path: Optional[Path] = None,
 ):
     """
     Main orchestrator logic
@@ -608,9 +771,12 @@ def run_orchestrator(
     Args:
         config_path: Optional sweep config (default: config/benchmark_sweep.yaml)
         resume_dir: Existing run directory to continue
+        registry_path: Optional library registry (default: config/libraries_registry.yaml)
     """
     if config_path is not None and resume_dir is not None:
         raise ValueError("config_path and resume_dir cannot be used together")
+    if registry_path is not None and resume_dir is not None:
+        raise ValueError("registry_path and resume_dir cannot be used together")
 
     if resume_dir is not None:
         run_dir = resume_dir.resolve()
@@ -621,7 +787,7 @@ def run_orchestrator(
         print(f"Resuming run folder: {run_dir}")
     else:
         sweep_config = config_path if config_path else DEFAULT_SWEEP_CONFIG
-        registry_config = REGISTRY_CONFIG
+        registry_config = registry_path if registry_path else REGISTRY_CONFIG
 
     # Load configurations
     sweep = load_yaml(sweep_config)
@@ -733,6 +899,15 @@ def run_orchestrator(
 
             for backend in backends:
                 backend_name = backend.get("name", "")
+                python_worker = (
+                    PythonAdapterWorker(
+                        library_name,
+                        library_config,
+                        backend.get("env", {}),
+                    )
+                    if library_config["type"] == "python"
+                    else None
+                )
 
                 for N in Ns:
                     for d in Ds:
@@ -806,6 +981,7 @@ def run_orchestrator(
                                             library_config,
                                             task_config,
                                             env_overrides=backend.get("env", {}),
+                                            worker=python_worker,
                                         )
                                     elif library_config["type"] == "julia":
                                         result = run_julia_adapter(
@@ -865,9 +1041,14 @@ def run_orchestrator(
                                         f"Failed {task_label}: {e}",
                                         file=sys.stderr,
                                     )
+                                    if python_worker is not None:
+                                        python_worker.close()
                                     raise
                                 finally:
                                     progress.update(1)
+
+                if python_worker is not None:
+                    python_worker.close()
 
         progress.set_description_str("benchmarks complete", refresh=True)
         progress.set_postfix_str("", refresh=True)
@@ -913,6 +1094,16 @@ Examples:
         default=None,
         help="Continue an existing run directory using its saved configurations",
     )
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        default=None,
+        help="Path to a library registry (default: config/libraries_registry.yaml)",
+    )
 
     args = parser.parse_args()
-    run_orchestrator(config_path=args.config, resume_dir=args.resume)
+    run_orchestrator(
+        config_path=args.config,
+        resume_dir=args.resume,
+        registry_path=args.registry,
+    )

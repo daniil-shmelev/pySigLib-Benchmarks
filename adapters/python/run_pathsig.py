@@ -19,6 +19,8 @@ from common import BenchmarkAdapter
 class PathSigAdapter(BenchmarkAdapter):
     """Benchmark PathSig's compiled CUDA signature modules."""
 
+    WORKER_SCOPE = "shape"
+
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         import pathsig
@@ -44,12 +46,22 @@ class PathSigAdapter(BenchmarkAdapter):
             )
         return paths
 
-    def _path_tensor(self, path: np.ndarray, d: int):
-        paths = self._prepare_paths(path, d)
-        return self.torch.as_tensor(
-            paths,
-            dtype=self.torch.float32,
-            device="cuda",
+    def _path_tensor(
+        self,
+        path: np.ndarray,
+        d: int,
+        *,
+        requires_grad: bool = False,
+    ):
+        namespace = f"pathsig.cuda.grad={requires_grad}"
+        return self.cached_prepared_input(
+            namespace,
+            path,
+            lambda: self.torch.as_tensor(
+                self._prepare_paths(path, d),
+                dtype=self.torch.float32,
+                device="cuda",
+            ).requires_grad_(requires_grad),
         )
 
     def _synchronized(self, function: Callable[[], Any]) -> Callable[[], Any]:
@@ -75,7 +87,7 @@ class PathSigAdapter(BenchmarkAdapter):
         return self._synchronized(lambda: module(path))
 
     def run_sigdiff(self, path: np.ndarray, d: int, m: int) -> Callable:
-        path = self._path_tensor(path, d).requires_grad_(True)
+        path = self._path_tensor(path, d, requires_grad=True)
         module = self.pathsig.Signature(depth=m).eval()
 
         def gradient():

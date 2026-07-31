@@ -34,7 +34,11 @@ class PolySigKernelAdapter(BenchmarkAdapter):
         path_np = np.ascontiguousarray(path, dtype=np.float32)
         if path_np.ndim == 2:
             path_np = path_np[None, :, :]
-        return self.jnp.asarray(path_np, dtype=self.jnp.float32)
+        return self.cached_prepared_input(
+            "polysigkernel.jax",
+            path,
+            lambda: self.jnp.asarray(path_np, dtype=self.jnp.float32),
+        )
 
     def run_signaturekernel(
         self,

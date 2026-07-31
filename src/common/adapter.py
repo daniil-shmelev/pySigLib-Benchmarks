@@ -8,12 +8,23 @@ import statistics
 import sys
 import time
 import tracemalloc
+from collections import OrderedDict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from .paths import make_path, make_path_batch
+
+
+@lru_cache(maxsize=4)
+def _load_fbm_input(cache_path: str) -> np.ndarray:
+    return np.load(cache_path, allow_pickle=False)
+
+
+_PREPARED_INPUTS: OrderedDict[tuple[str, int], tuple[np.ndarray, Any]] = OrderedDict()
+_MAX_PREPARED_INPUTS = 8
 
 
 class BenchmarkAdapter:
@@ -105,7 +116,7 @@ class BenchmarkAdapter:
             )
             os.replace(temporary_checksum, checksum_path)
 
-        path = np.load(cache_path, allow_pickle=False)
+        path = _load_fbm_input(str(cache_path.resolve()))
         expected_shape = (
             (self.N, self.d)
             if self.batch_size == 1
@@ -117,6 +128,26 @@ class BenchmarkAdapter:
                 f"{expected_shape}, got {path.dtype} shape {path.shape}"
             )
         return path
+
+    def cached_prepared_input(
+        self,
+        namespace: str,
+        path: np.ndarray,
+        prepare: Callable[[], Any],
+    ) -> Any:
+        """Reuse a host or device input while its source path remains cached."""
+        key = (namespace, id(path))
+        cached = _PREPARED_INPUTS.get(key)
+        if cached is not None and cached[0] is path:
+            _PREPARED_INPUTS.move_to_end(key)
+            return cached[1]
+
+        prepared = prepare()
+        _PREPARED_INPUTS[key] = (path, prepared)
+        _PREPARED_INPUTS.move_to_end(key)
+        while len(_PREPARED_INPUTS) > _MAX_PREPARED_INPUTS:
+            _PREPARED_INPUTS.popitem(last=False)
+        return prepared
 
     def make_path_input(self):
         """Generate this benchmark's input path, batched when requested."""

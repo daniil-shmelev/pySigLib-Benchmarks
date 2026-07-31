@@ -24,6 +24,14 @@ Run a quick CPU smoke test:
 uv run src/orchestrator.py config/smoke.yaml
 ```
 
+Run a sweep with a saved or restricted library registry:
+
+```bash
+uv run src/orchestrator.py \
+    --registry runs/benchmark_TIMESTAMP/libraries_registry.yaml \
+    config/benchmark_sweep.yaml
+```
+
 Resume an interrupted run:
 
 ```bash
@@ -87,6 +95,11 @@ source; `log-signatures-pytorch` uses a pinned compatibility wheel; and
 
 - Seeded fBM inputs are cached with SHA-256 sidecars and reused across matching
   libraries and backends.
+- Python tasks reuse persistent worker processes. Most adapters use one process
+  per backend; adapters whose native state affects later measurements can
+  recycle the worker at shape boundaries. Framework imports, CUDA
+  initialization, and compatible host/device inputs are reused, while results
+  are still committed one task at a time for safe resume.
 - Every measured iteration is stored in `samples_ms`; `t_ms` is the median.
 - Results keep library, method, backend, path representation, and batch size
   distinct.
@@ -111,6 +124,11 @@ Python adapters subclass `common.BenchmarkAdapter` and return a callable
 containing only the measured operation. Register new adapters in
 `config/libraries_registry.yaml`; asynchronous kernels must synchronize before
 returning.
+
+Python adapters default to one worker process per backend. An adapter whose
+native state changes later measurements can set `WORKER_SCOPE = "shape"` to
+restart only when `(N, d, batch_size, path_kind, seed)` changes. PathSig uses
+this scope; the JAX adapters retain one process for the complete backend sweep.
 
 Run the tests with:
 

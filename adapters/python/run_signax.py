@@ -32,8 +32,14 @@ class SignaxAdapter(BenchmarkAdapter):
 
     def _path_array(self, path: np.ndarray):
         """Convert path data to a contiguous JAX array during setup."""
-        path_np = np.ascontiguousarray(path, dtype=np.float32)
-        return self.jnp.asarray(path_np, dtype=self.jnp.float32)
+        return self.cached_prepared_input(
+            "signax.jax",
+            path,
+            lambda: self.jnp.asarray(
+                np.ascontiguousarray(path, dtype=np.float32),
+                dtype=self.jnp.float32,
+            ),
+        )
 
     def run_signature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """

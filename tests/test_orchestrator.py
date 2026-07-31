@@ -1,6 +1,7 @@
 """Tests for benchmark orchestration and resume semantics."""
 
 import csv
+import io
 import json
 import subprocess
 import sys
@@ -76,6 +77,159 @@ def test_python_adapter_expands_repo_root_in_environment(tmp_path, monkeypatch):
 
     assert result == {"library": "example"}
     assert captured["EXAMPLE_PATH"] == str(tmp_path / "dependency")
+
+
+def test_python_worker_reuses_process_and_recovers_after_task_error(tmp_path):
+    adapter_path = tmp_path / "adapter.py"
+    adapter_path.write_text(
+        "\n".join([
+            "import os",
+            "from common import BenchmarkAdapter",
+            "task_count = 0",
+            "class TestAdapter(BenchmarkAdapter):",
+            "    def _run_benchmark(self):",
+            "        global task_count",
+            "        task_count += 1",
+            "        if self.N == 4:",
+            "            print('native diagnostic', end='', flush=True)",
+            "            raise RuntimeError('expected task failure')",
+            "        return {'pid': os.getpid(), 'task_count': task_count}",
+        ]),
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        [sys.executable, str(orchestrator.PYTHON_ADAPTER_WORKER), str(adapter_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+    )
+
+    def response():
+        while True:
+            line = process.stdout.readline()
+            assert line != ""
+            protocol_index = line.find(orchestrator.PYTHON_WORKER_PROTOCOL_PREFIX)
+            if protocol_index >= 0:
+                return json.loads(
+                    line[
+                        protocol_index
+                        + len(orchestrator.PYTHON_WORKER_PROTOCOL_PREFIX):
+                    ]
+                )
+
+    assert response()["status"] == "ready"
+    base_config = {
+        "d": 2,
+        "m": 2,
+        "path_kind": "sin",
+        "operation": "signature",
+        "repeats": 1,
+        "batch_size": 1,
+    }
+    process.stdin.write(json.dumps({**base_config, "N": 4}) + "\n")
+    process.stdin.flush()
+    assert response()["status"] == "error"
+
+    process.stdin.write(json.dumps({**base_config, "N": 8}) + "\n")
+    process.stdin.flush()
+    result = response()
+    assert result["status"] == "result"
+    assert result["result"]["pid"] == process.pid
+    assert result["result"]["task_count"] == 2
+
+    process.stdin.close()
+    assert process.wait(timeout=5) == 0
+
+
+def test_worker_parser_accepts_protocol_after_unterminated_diagnostic():
+    response = {"status": "result", "result": {"value": 1}}
+    stdout = io.StringIO(
+        "native diagnostic"
+        + orchestrator.PYTHON_WORKER_PROTOCOL_PREFIX
+        + json.dumps(response)
+        + "\n"
+    )
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = stdout
+
+        @staticmethod
+        def poll():
+            return None
+
+    worker = orchestrator.PythonAdapterWorker("example", {})
+    worker.process = FakeProcess()
+
+    assert worker._read_response() == response
+    assert worker.diagnostics == ["native diagnostic"]
+
+
+def test_shape_scoped_worker_reuses_only_matching_shapes():
+    worker = orchestrator.PythonAdapterWorker(
+        "example",
+        {"worker_scope": "shape"},
+    )
+    base = {
+        "N": 256,
+        "d": 4,
+        "m": 2,
+        "batch_size": 32,
+        "path_kind": "fbm",
+        "seed": 7,
+    }
+
+    assert worker._task_scope_key(base) == worker._task_scope_key({
+        **base,
+        "m": 3,
+        "operation": "logsignature",
+    })
+    assert worker._task_scope_key(base) != worker._task_scope_key({
+        **base,
+        "d": 8,
+    })
+
+
+def test_orchestrator_passes_one_worker_to_all_backend_tasks(tmp_path, monkeypatch):
+    sweep_path = tmp_path / "sweep.yaml"
+    sweep_path.write_text(
+        "\n".join([
+            "path_kind: sin",
+            "Ns: [4, 8]",
+            "Ds: [2]",
+            "Ms: [2]",
+            "operations: [signature]",
+            "batch_size: 1",
+            "repeats: 1",
+            "runs_dir: runs",
+        ]),
+        encoding="utf-8",
+    )
+    registry_path = tmp_path / "registry.yaml"
+    registry_path.write_text(
+        "\n".join([
+            "libraries:",
+            "  example:",
+            "    type: python",
+            "    script: adapter.py",
+            "    operations: [signature]",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orchestrator, "REPO_ROOT", tmp_path)
+    workers = []
+
+    def fake_adapter(library_name, library_config, task_config, **kwargs):
+        workers.append(kwargs["worker"])
+        return _result(task_config)
+
+    monkeypatch.setattr(orchestrator, "run_python_adapter", fake_adapter)
+    orchestrator.run_orchestrator(sweep_path, registry_path=registry_path)
+
+    assert len(workers) == 2
+    assert workers[0] is workers[1]
 
 
 def test_compatibility_wheel_is_installed_once(tmp_path, monkeypatch):

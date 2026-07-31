@@ -31,8 +31,14 @@ class PySigLibAdapter(BenchmarkAdapter):
 
     def _path_array(self, path: np.ndarray):
         """Convert path data to a contiguous JAX array during setup."""
-        path_np = np.ascontiguousarray(path, dtype=np.float32)
-        return self.jnp.asarray(path_np, dtype=self.jnp.float32)
+        return self.cached_prepared_input(
+            "pysiglib.jax",
+            path,
+            lambda: self.jnp.asarray(
+                np.ascontiguousarray(path, dtype=np.float32),
+                dtype=self.jnp.float32,
+            ),
+        )
 
     def run_signature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
@@ -119,6 +125,19 @@ class PySigLibAdapter(BenchmarkAdapter):
 
         Returns a closure that performs only the kernel (no setup).
         """
+        if (
+            self.backend == "gpu"
+            and self.pysiglib.branched_sig_length(
+                d,
+                m,
+                planar=planar,
+                scalar_term=False,
+            ) > 1024
+        ):
+            raise RuntimeError(
+                "CUDA branched sig: num_trees > 1024 not supported"
+            )
+
         # Setup phase (untimed): ensure path is contiguous and prepare cached
         # tree/coproduct data for the selected planar convention.
         path = self._path_array(path)
