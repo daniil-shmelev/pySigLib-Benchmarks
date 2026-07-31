@@ -1304,6 +1304,7 @@ all = [
     { name = "pysiglib", extra = ["cuda"] },
     { name = "roughpy" },
     { name = "scikit-build-core" },
+    { name = "signatory" },
     { name = "signature-py" },
     { name = "signax" },
     { name = "stochastax" },
@@ -1346,6 +1347,11 @@ pysiglib = [
 ]
 roughpy = [
     { name = "roughpy" },
+]
+signatory = [
+    { name = "signatory" },
+    { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
+    { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "sys_platform == 'win32'" },
 ]
 signature-rs = [
     { name = "signature-py" },
@@ -1394,6 +1400,8 @@ requires-dist = [
     { name = "roughpy", marker = "extra == 'roughpy'", specifier = "==0.3.0" },
     { name = "scikit-build-core", marker = "extra == 'all'", specifier = ">=0.10" },
     { name = "scikit-build-core", marker = "extra == 'pathsig'", specifier = ">=0.10" },
+    { name = "signatory", marker = "extra == 'all'", git = "https://github.com/datasig-ac-uk/signatory.git?rev=f263b9d9358c81a144c9d9bb78006745136abbf8" },
+    { name = "signatory", marker = "extra == 'signatory'", git = "https://github.com/datasig-ac-uk/signatory.git?rev=f263b9d9358c81a144c9d9bb78006745136abbf8" },
     { name = "signature-py", marker = "extra == 'all'", git = "https://github.com/ChosunOne/signature-rs.git?subdirectory=signature-py&rev=671b0fba16f1c542e76910c2825a9e8b185d3a93" },
     { name = "signature-py", marker = "extra == 'signature-rs'", git = "https://github.com/ChosunOne/signature-rs.git?subdirectory=signature-py&rev=671b0fba16f1c542e76910c2825a9e8b185d3a93" },
     { name = "signax", marker = "extra == 'all'", git = "https://github.com/anh-tong/signax?rev=4961f361b60d293f4e7679dba028b93dead89c39" },
@@ -1406,13 +1414,24 @@ requires-dist = [
     { name = "torch", marker = "sys_platform == 'win32' and extra == 'chen-signatures'", index = "https://download.pytorch.org/whl/cu130" },
     { name = "torch", marker = "sys_platform == 'win32' and extra == 'log-signatures-pytorch'", specifier = ">=2.9.1", index = "https://download.pytorch.org/whl/cu130" },
     { name = "torch", marker = "sys_platform == 'win32' and extra == 'pathsig'", specifier = ">=2.4", index = "https://download.pytorch.org/whl/cu130" },
+    { name = "torch", marker = "sys_platform == 'win32' and extra == 'signatory'", specifier = ">=2.9.1", index = "https://download.pytorch.org/whl/cu130" },
     { name = "torch", marker = "sys_platform != 'win32' and extra == 'all'", specifier = ">=2.9.1" },
     { name = "torch", marker = "sys_platform != 'win32' and extra == 'chen-signatures'" },
     { name = "torch", marker = "sys_platform != 'win32' and extra == 'log-signatures-pytorch'", specifier = ">=2.9.1" },
     { name = "torch", marker = "sys_platform != 'win32' and extra == 'pathsig'", specifier = ">=2.4" },
+    { name = "torch", marker = "sys_platform != 'win32' and extra == 'signatory'", specifier = ">=2.9.1" },
     { name = "tqdm" },
 ]
-provides-extras = ["chen-signatures", "iisignature", "roughpy", "signature-rs", "log-signatures-pytorch", "pathsig", "pysiglib", "stochastax", "signax", "keras-sig", "polysigkernel", "tensordev", "all"]
+provides-extras = ["chen-signatures", "iisignature", "roughpy", "signature-rs", "log-signatures-pytorch", "signatory", "pathsig", "pysiglib", "stochastax", "signax", "keras-sig", "polysigkernel", "tensordev", "all"]
+
+[[package]]
+name = "signatory"
+version = "1.2.7"
+source = { git = "https://github.com/datasig-ac-uk/signatory.git?rev=f263b9d9358c81a144c9d9bb78006745136abbf8#f263b9d9358c81a144c9d9bb78006745136abbf8" }
+dependencies = [
+    { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
+    { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "sys_platform == 'win32'" },
+]
 
 [[package]]
 name = "signature-py"

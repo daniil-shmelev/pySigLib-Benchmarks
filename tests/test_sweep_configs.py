@@ -27,6 +27,7 @@ BACKPROP_OPERATIONS = {
 PAPER_SIGNATURE_LIBRARIES = {
     "iisignature",
     "log-signatures-pytorch",
+    "signatory",
     "pathsig",
     "pysiglib",
     "stochastax",

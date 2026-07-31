@@ -3,6 +3,7 @@
 libraries:
     - iisignature
     - log-signatures-pytorch
+    - signatory
     - pathsig
     - pysiglib
     - stochastax

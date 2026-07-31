@@ -52,6 +52,20 @@ libraries:
       - sig_backprop
       - logsignature_backprop
 
+  signatory:
+    type: python
+    script: "adapters/python/run_signatory.py"
+    extras:
+      - signatory
+    backends:
+      - name: cpu
+      - name: gpu
+    operations:
+      - signature
+      - logsignature
+      - sig_backprop
+      - logsignature_backprop
+
   pathsig:
     type: python
     script: "adapters/python/run_pathsig.py"

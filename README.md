@@ -92,6 +92,7 @@ paper sweep YAML to change its package list or parameter grid.
 | `roughpy` | CPU | signature, logsignature |
 | `signature-rs` | CPU | logsignature |
 | `log-signatures-pytorch` | CPU, GPU | signature, logsignature, backprop |
+| `signatory` | CPU, GPU | signature, logsignature, backprop |
 | `pathsig` | GPU | signature, logsignature, backprop |
 | `pysiglib` | CPU, GPU | signature, logsignature, planar/non-planar branched signature, signature kernel, backprop |
 | `polysigkernel` | CPU, GPU | signature kernel, backprop |
@@ -108,13 +109,13 @@ Important comparison notes:
   loop overhead.
 - JAX kernels compile during warmup and synchronize every measured call.
   `log-signatures-pytorch` uses eager CPU execution and compiled GPU execution.
-- `pathsig` reports compact Lyndon-basis log-signatures. `tensordev` reports an
-  expanded word-basis tensor logarithm, so their log-signature output sizes
-  differ.
+- `pathsig` and `signatory` report compact Lyndon-basis log-signatures.
+  `tensordev` reports an expanded word-basis tensor logarithm, so its
+  log-signature output size differs.
 
 The lockfiles pin the environments. `signature-py` builds from pinned Rust
 source; `log-signatures-pytorch` uses a pinned compatibility wheel; and
-`pathsig` builds its CUDA extension once and reuses the uv cache.
+`pathsig` and `signatory` build their extensions once and reuse the uv cache.
 
 ## Protocol and output
 
