@@ -61,10 +61,9 @@ def test_polysigkernel_signaturekernel_matches_direct_api():
     np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
 
 
-def test_pysiglib_signaturekernel_matches_jax_api():
-    """pySigLib adapter uses the JAX signature-kernel Gram API."""
-    pytest.importorskip("jax")
-    pytest.importorskip("pysiglib.jax_api")
+def test_pysiglib_signaturekernel_matches_standard_api():
+    """pySigLib adapter uses the standard signature-kernel Gram API."""
+    pytest.importorskip("pysiglib")
 
     adapter = PySigLibAdapter(_config("signaturekernel"))
     path1 = _path_batch()
@@ -114,9 +113,8 @@ def test_polysigkernel_backprop_matches_direct_vjp():
     np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
 
 
-def test_pysiglib_signaturekernel_backprop_matches_direct_vjp():
-    pytest.importorskip("jax")
-    pytest.importorskip("pysiglib.jax_api")
+def test_pysiglib_signaturekernel_backprop_matches_standard_api():
+    pytest.importorskip("pysiglib")
 
     adapter = PySigLibAdapter(_config("signaturekernel_backprop"))
     path1 = _path_batch()
@@ -127,18 +125,21 @@ def test_pysiglib_signaturekernel_backprop_matches_direct_vjp():
 
     X = adapter._path_array(path1)
     Y = adapter._path_array(path2)
-    output, pullback = adapter.jax.vjp(
-        lambda X_arg: adapter.pysiglib.sig_kernel_gram(
-            X_arg,
-            Y,
-            dyadic_order=2,
-        ),
+    output = adapter.pysiglib.sig_kernel_gram(
         X,
+        Y,
+        dyadic_order=2,
     )
-    cotangent = adapter.jnp.asarray(
-        adapter.random_cotangent(output.shape),
-        dtype=output.dtype,
+    cotangent = np.asarray(
+        adapter.random_cotangent(output.shape), dtype=output.dtype
     )
-    expected = np.asarray(pullback(cotangent)[0])
+    expected, _ = adapter.pysiglib.sig_kernel_gram_backprop(
+        cotangent,
+        X,
+        Y,
+        dyadic_order=2,
+        left_deriv=True,
+        right_deriv=False,
+    )
 
-    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(got, np.asarray(expected), rtol=1e-5, atol=1e-5)

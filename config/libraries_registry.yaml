@@ -83,16 +83,13 @@ libraries:
 
   pysiglib:
     type: python
+    memory_framework: torch
     script: "adapters/python/run_pysiglib.py"
     extras:
       - pysiglib
     backends:
       - name: cpu
-        env:
-          JAX_PLATFORM_NAME: cpu
       - name: gpu
-        env:
-          JAX_PLATFORM_NAME: gpu
     operations:
       - signature
       - logsignature
