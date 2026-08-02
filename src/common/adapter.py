@@ -87,6 +87,8 @@ class BenchmarkAdapter:
             )
         self.call_timeout_seconds = config.get("call_timeout_seconds")
         self._call_event_callback = config.get("_call_event_callback")
+        self.memory_benchmark = bool(config.get("memory_benchmark", False))
+        self._memory_metrics: Dict[str, Any] = {}
         self.batch_size = int(config.get("batch_size", 1))
         if self.batch_size < 1:
             raise ValueError(f"batch_size must be >= 1, got {self.batch_size}")
@@ -222,28 +224,55 @@ class BenchmarkAdapter:
             )
 
         def invoke(phase: str, iteration: int) -> None:
-            if (
+            emit_call_event = (
                 self._call_event_callback is not None
-                and self.call_timeout_seconds is not None
-            ):
-                self._call_event_callback({
+                and (
+                    self.call_timeout_seconds is not None
+                    or self.memory_benchmark
+                )
+            )
+            if emit_call_event:
+                event = {
                     "status": "call_start",
                     "phase": phase,
                     "iteration": iteration,
-                    "timeout_seconds": self.call_timeout_seconds,
-                })
+                }
+                if self.call_timeout_seconds is not None:
+                    event["timeout_seconds"] = self.call_timeout_seconds
+                self._call_event_callback(event)
             try:
                 func()
             finally:
-                if (
-                    self._call_event_callback is not None
-                    and self.call_timeout_seconds is not None
-                ):
+                if emit_call_event:
                     self._call_event_callback({
                         "status": "call_end",
                         "phase": phase,
                         "iteration": iteration,
                     })
+
+        if self.memory_benchmark:
+            for iteration in range(warmup_iterations):
+                gpu_before = self._gpu_memory_snapshot(reset_peak=True)
+                try:
+                    invoke("warmup", iteration)
+                finally:
+                    self._memory_metrics = self._summarize_gpu_memory(
+                        gpu_before,
+                        self._gpu_memory_snapshot(),
+                    )
+            gc.collect()
+            gpu_before = self._gpu_memory_snapshot(reset_peak=True)
+            t0 = time.perf_counter()
+            try:
+                invoke("measured", 0)
+            finally:
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                gpu_after = self._gpu_memory_snapshot()
+                self._memory_metrics = self._summarize_gpu_memory(
+                    gpu_before,
+                    gpu_after,
+                )
+            return elapsed_ms, 0, [elapsed_ms]
 
         # Warmup phase (untimed)
         for iteration in range(warmup_iterations):
@@ -277,6 +306,70 @@ class BenchmarkAdapter:
         avg_alloc_bytes = total_alloc_bytes // self.repeats if self.repeats > 0 else 0
 
         return summary_time_ms, avg_alloc_bytes, samples_ms
+
+    def _gpu_memory_snapshot(self, reset_peak: bool = False) -> Dict[str, Any]:
+        """Read allocator memory statistics for the active GPU framework."""
+        if self.backend != "gpu":
+            return {}
+
+        memory_framework = self.config.get("memory_framework")
+        torch = sys.modules.get("torch")
+        if (
+            memory_framework in (None, "torch")
+            and torch is not None
+            and torch.cuda.is_available()
+        ):
+            device = torch.cuda.current_device()
+            torch.cuda.synchronize(device)
+            if reset_peak:
+                torch.cuda.reset_peak_memory_stats(device)
+            return {
+                "source": "torch_cuda_allocator",
+                "current_allocated_bytes": int(torch.cuda.memory_allocated(device)),
+                "peak_allocated_bytes": int(torch.cuda.max_memory_allocated(device)),
+                "peak_reserved_bytes": int(torch.cuda.max_memory_reserved(device)),
+            }
+
+        if memory_framework not in (None, "jax"):
+            return {}
+        jax = sys.modules.get("jax")
+        if jax is None:
+            return {}
+        try:
+            device = next(
+                device for device in jax.devices()
+                if device.platform == "gpu"
+            )
+            stats = device.memory_stats() or {}
+        except (RuntimeError, StopIteration):
+            return {}
+        return {
+            "source": "jax_device_stats",
+            "current_allocated_bytes": stats.get("bytes_in_use"),
+            "peak_allocated_bytes": stats.get("peak_bytes_in_use"),
+            "peak_reserved_bytes": stats.get("peak_pool_bytes"),
+        }
+
+    @staticmethod
+    def _summarize_gpu_memory(
+        before: Dict[str, Any],
+        after: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Convert framework snapshots into result columns."""
+        if not before and not after:
+            return {}
+        baseline = before.get("current_allocated_bytes")
+        peak = after.get("peak_allocated_bytes")
+        delta = None
+        if baseline is not None and peak is not None:
+            delta = max(0, int(peak) - int(baseline))
+        return {
+            "gpu_memory_source": after.get("source") or before.get("source"),
+            "gpu_baseline_allocated_bytes": baseline,
+            "gpu_peak_allocated_bytes": peak,
+            "gpu_peak_allocated_delta_bytes": delta,
+            "gpu_peak_reserved_bytes": after.get("peak_reserved_bytes"),
+        }
 
     def run_signature(self, path, d: int, m: int) -> Optional[Callable]:
         """
@@ -430,7 +523,7 @@ class BenchmarkAdapter:
         Returns:
             Formatted result dictionary
         """
-        return {
+        result = {
             "N": self.N,
             "d": self.d,
             "m": self.m,
@@ -450,3 +543,5 @@ class BenchmarkAdapter:
             "samples_ms": samples_ms,
             "alloc_bytes": alloc_bytes,
         }
+        result.update(self._memory_metrics)
+        return result

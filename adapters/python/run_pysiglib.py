@@ -27,6 +27,7 @@ class PySigLibAdapter(BenchmarkAdapter):
         self.torch = torch
         self.log_sig_from_path_backprop = _log_sig_from_path_backprop
         self.log_sig_method = int(config.get("log_sig_method", 2))
+        self.n_jobs = int(config.get("n_jobs", 1))
 
     def _path_array(self, path: np.ndarray):
         """Prepare the standard API input array outside the timed region."""
@@ -74,6 +75,7 @@ class PySigLibAdapter(BenchmarkAdapter):
             result = self.pysiglib.signature(
                 path,
                 degree=m,
+                n_jobs=self.n_jobs,
             )
             return self._synchronize(result)
 
@@ -107,6 +109,7 @@ class PySigLibAdapter(BenchmarkAdapter):
                 m,
                 method=log_sig_method,
                 scalar_term=use_scalar_term,
+                n_jobs=self.n_jobs,
             )
             return self._synchronize(result)
 
@@ -122,6 +125,7 @@ class PySigLibAdapter(BenchmarkAdapter):
         output = self.pysiglib.signature(
             path,
             degree=m,
+            n_jobs=self.n_jobs,
         )
         self._synchronize(output)
         cotangent = self._cotangent(output)
@@ -132,6 +136,7 @@ class PySigLibAdapter(BenchmarkAdapter):
                 output,
                 cotangent,
                 m,
+                n_jobs=self.n_jobs,
             )
             return self._synchronize(result)
 
@@ -159,6 +164,7 @@ class PySigLibAdapter(BenchmarkAdapter):
                 path,
                 m,
                 method=3,
+                n_jobs=self.n_jobs,
             )
             self._synchronize(output)
             cotangent = self._cotangent(output)
@@ -168,6 +174,7 @@ class PySigLibAdapter(BenchmarkAdapter):
                     cotangent,
                     path,
                     m,
+                    n_jobs=self.n_jobs,
                 )
                 return self._synchronize(result)
 
@@ -177,12 +184,14 @@ class PySigLibAdapter(BenchmarkAdapter):
             path,
             degree=m,
             scalar_term=use_scalar_term,
+            n_jobs=self.n_jobs,
         )
         output = self.pysiglib.sig_to_log_sig(
             signature,
             d,
             m,
             method=log_sig_method,
+            n_jobs=self.n_jobs,
         )
         self._synchronize(output)
         cotangent = self._cotangent(output)
@@ -194,12 +203,14 @@ class PySigLibAdapter(BenchmarkAdapter):
                 d,
                 m,
                 method=log_sig_method,
+                n_jobs=self.n_jobs,
             )
             result = self.pysiglib.sig_backprop(
                 path,
                 signature,
                 sig_cotangent,
                 m,
+                n_jobs=self.n_jobs,
             )
             return self._synchronize(result)
 
@@ -239,6 +250,7 @@ class PySigLibAdapter(BenchmarkAdapter):
                 path,
                 degree=m,
                 planar=planar,
+                n_jobs=self.n_jobs,
             )
             return self._synchronize(result)
 
@@ -270,6 +282,7 @@ class PySigLibAdapter(BenchmarkAdapter):
             path,
             degree=m,
             planar=planar,
+            n_jobs=self.n_jobs,
         )
         self._synchronize(output)
         cotangent = self._cotangent(output)
@@ -281,6 +294,7 @@ class PySigLibAdapter(BenchmarkAdapter):
                 cotangent,
                 m,
                 planar=planar,
+                n_jobs=self.n_jobs,
             )
             return self._synchronize(result)
 
@@ -310,6 +324,7 @@ class PySigLibAdapter(BenchmarkAdapter):
                 dyadic_order=dyadic_order,
                 static_kernel=None,
                 time_aug=False,
+                n_jobs=self.n_jobs,
                 max_batch=max_batch,
             )
             return self._synchronize(result)
@@ -334,6 +349,7 @@ class PySigLibAdapter(BenchmarkAdapter):
             dyadic_order=dyadic_order,
             static_kernel=None,
             time_aug=False,
+            n_jobs=self.n_jobs,
             max_batch=max_batch,
         )
         self._synchronize(output)
@@ -349,6 +365,7 @@ class PySigLibAdapter(BenchmarkAdapter):
                 time_aug=False,
                 left_deriv=True,
                 right_deriv=False,
+                n_jobs=self.n_jobs,
                 max_batch=max_batch,
             )
             return self._synchronize(result)

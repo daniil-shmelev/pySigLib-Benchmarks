@@ -23,6 +23,7 @@ batch_size: 32
 repeats: 3
 warmup_iterations: 1
 timing_statistic: "min"
+worker_memory_limit_gb: 16
 clear_input_caches_after_task: true
 
 sig_kernel_solver: "monomial_approx"
@@ -33,5 +34,8 @@ library_configs:
         sig_kernel_order: 3
     pysiglib:
         sig_kernel_dyadic_order: 1
+        backend_configs:
+            cpu:
+                n_jobs: -1
 
 runs_dir: "runs"

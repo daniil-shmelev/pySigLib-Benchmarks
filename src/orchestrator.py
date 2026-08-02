@@ -30,6 +30,7 @@ REPO_ROOT = SRC_DIR.parent
 COMPATIBILITY_PACKAGES_DIR = REPO_ROOT / ".adapter_packages"
 PYTHON_ADAPTER_WORKER = SRC_DIR / "python_adapter_worker.py"
 PYTHON_WORKER_PROTOCOL_PREFIX = "__PYSIGLIB_BENCHMARK_WORKER__"
+WORKER_SIGKILL = getattr(signal, "SIGKILL", 9)
 
 # Configuration paths
 CONFIG_DIR = REPO_ROOT / "config"
@@ -96,6 +97,10 @@ class BenchmarkCallTimeout(TimeoutError):
     """A benchmark kernel call exceeded its configured deadline."""
 
 
+class BenchmarkWorkerOOM(MemoryError):
+    """A benchmark worker exceeded its memory limit or received SIGKILL."""
+
+
 def load_yaml(path: Path) -> Dict[str, Any]:
     """Load YAML configuration file"""
     if not path.exists():
@@ -120,10 +125,15 @@ def make_task_id(
     task_config: Dict[str, Any],
 ) -> str:
     """Return a stable ID for one adapter invocation."""
+    identity_config = {
+        key: value
+        for key, value in task_config.items()
+        if key != "worker_memory_limit_gb"
+    }
     payload = {
         "library": library_name,
         "backend": backend_name,
-        "config": task_config,
+        "config": identity_config,
     }
     encoded = json.dumps(
         payload,
@@ -557,6 +567,7 @@ def prepare_python_adapter_process(
             .replace("{repo_root}/", str(REPO_ROOT) + os.sep)
             .replace("{repo_root}\\", str(REPO_ROOT) + os.sep)
             .replace("{repo_root}", str(REPO_ROOT))
+            .replace("{cpu_count}", str(os.cpu_count() or 1))
             for key, value in env_overrides.items()
         })
 
@@ -598,6 +609,12 @@ class PythonAdapterWorker:
         self.scope_key = None
         self._output_queue = None
         self._reader_thread = None
+        self._memory_limit_bytes = None
+        self._measure_memory = False
+        self._memory_sample_interval_seconds = 0.005
+        self._memory_call_active = False
+        self._memory_metrics: Dict[str, Any] = {}
+        self._cgroup_memory_current_path: Optional[Path] = None
 
     def __enter__(self):
         return self
@@ -613,23 +630,42 @@ class PythonAdapterWorker:
         active_call = None
         while True:
             timeout = None
+            if self._memory_limit_bytes is not None:
+                timeout = 0.1
+            if self._memory_call_active:
+                timeout = self._memory_sample_interval_seconds
             if deadline is not None:
-                timeout = max(0.0, deadline - time.monotonic())
+                remaining = max(0.0, deadline - time.monotonic())
+                timeout = remaining if timeout is None else min(timeout, remaining)
             try:
                 line = self._output_queue.get(timeout=timeout)
             except queue.Empty:
-                phase = active_call.get("phase", "call")
-                iteration = active_call.get("iteration", 0) + 1
-                timeout_seconds = active_call["timeout_seconds"]
-                self._kill_process_tree()
-                raise BenchmarkCallTimeout(
-                    f"{self.library_name}: {phase} call {iteration} exceeded "
-                    f"{timeout_seconds:g} seconds"
-                )
+                self._sample_host_memory()
+                self._raise_if_memory_limit_exceeded()
+                if deadline is not None and time.monotonic() >= deadline:
+                    phase = active_call.get("phase", "call")
+                    iteration = active_call.get("iteration", 0) + 1
+                    timeout_seconds = active_call["timeout_seconds"]
+                    self._kill_process_tree()
+                    raise BenchmarkCallTimeout(
+                        f"{self.library_name}: {phase} call {iteration} exceeded "
+                        f"{timeout_seconds:g} seconds"
+                    )
+                continue
 
             if line is None:
+                self._sample_host_memory()
                 return_code = self.process.poll()
                 details = "\n".join(self.diagnostics[-20:])
+                if (
+                    return_code in (-WORKER_SIGKILL, 128 + WORKER_SIGKILL)
+                    or "oom-kill" in details.lower()
+                ):
+                    self._record_memory_limit_peak()
+                    raise BenchmarkWorkerOOM(
+                        f"{self.library_name}: worker received SIGKILL, likely due to OOM"
+                        + (f"\n{details}" if details else "")
+                    )
                 raise RuntimeError(
                     f"{self.library_name}: worker exited with code {return_code}"
                     + (f"\n{details}" if details else "")
@@ -645,20 +681,173 @@ class PythonAdapterWorker:
                 )
                 status = payload.get("status")
                 if status == "call_start":
-                    timeout_seconds = float(payload["timeout_seconds"])
-                    active_call = {
-                        **payload,
-                        "timeout_seconds": timeout_seconds,
-                    }
-                    deadline = time.monotonic() + timeout_seconds
+                    timeout_seconds = payload.get("timeout_seconds")
+                    active_call = dict(payload)
+                    if timeout_seconds is not None:
+                        timeout_seconds = float(timeout_seconds)
+                        active_call["timeout_seconds"] = timeout_seconds
+                        deadline = time.monotonic() + timeout_seconds
+                    if (
+                        self._measure_memory
+                        and payload.get("phase") in ("warmup", "measured")
+                    ):
+                        self._begin_host_memory_measurement()
                     continue
                 if status == "call_end":
+                    if (
+                        self._measure_memory
+                        and payload.get("phase") in ("warmup", "measured")
+                    ):
+                        self._sample_host_memory()
+                        self._memory_call_active = False
                     active_call = None
                     deadline = None
                     continue
+                if status == "result" and self._measure_memory:
+                    result = payload.get("result")
+                    if isinstance(result, dict):
+                        result.update(self._memory_metrics)
                 return payload
             if line:
                 self.diagnostics.append(line)
+
+    def _worker_resident_bytes(self) -> Optional[int]:
+        if os.name != "posix" or self.process is None:
+            return None
+
+        pending = [self.process.pid]
+        seen = set()
+        resident_bytes = 0
+        while pending:
+            pid = pending.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            try:
+                children = Path(
+                    f"/proc/{pid}/task/{pid}/children"
+                ).read_text(encoding="ascii")
+                pending.extend(int(child) for child in children.split())
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
+                pass
+            try:
+                status = Path(f"/proc/{pid}/status").read_text(encoding="ascii")
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
+                continue
+            for line in status.splitlines():
+                if line.startswith("VmRSS:"):
+                    resident_bytes += int(line.split()[1]) * 1024
+                    break
+        return resident_bytes
+
+    def _host_memory_bytes(self) -> Optional[int]:
+        if self._cgroup_memory_current_path is not None:
+            try:
+                return int(
+                    self._cgroup_memory_current_path.read_text(
+                        encoding="ascii"
+                    ).strip()
+                )
+            except (FileNotFoundError, PermissionError, ValueError):
+                pass
+        return self._worker_resident_bytes()
+
+    def _begin_host_memory_measurement(self) -> None:
+        baseline = self._host_memory_bytes()
+        self._memory_metrics = {
+            "host_memory_source": (
+                "cgroup_memory_current"
+                if self._cgroup_memory_current_path is not None
+                else "process_tree_rss"
+            ),
+            "host_baseline_bytes": baseline,
+            "host_peak_bytes": baseline,
+            "host_peak_delta_bytes": 0 if baseline is not None else None,
+        }
+        self._memory_call_active = True
+
+    def _sample_host_memory(self) -> None:
+        if not self._memory_call_active:
+            return
+        resident_bytes = self._host_memory_bytes()
+        if resident_bytes is None:
+            return
+        peak = self._memory_metrics.get("host_peak_bytes")
+        if peak is None or resident_bytes > peak:
+            self._memory_metrics["host_peak_bytes"] = resident_bytes
+        baseline = self._memory_metrics.get("host_baseline_bytes")
+        if baseline is not None:
+            self._memory_metrics["host_peak_delta_bytes"] = max(
+                0,
+                self._memory_metrics["host_peak_bytes"] - baseline,
+            )
+
+    def _record_memory_limit_peak(self) -> None:
+        if not self._measure_memory or self._memory_limit_bytes is None:
+            return
+        peak = self._memory_metrics.get("host_peak_bytes")
+        if peak is None or peak < self._memory_limit_bytes:
+            self._memory_metrics["host_peak_bytes"] = self._memory_limit_bytes
+        baseline = self._memory_metrics.get("host_baseline_bytes")
+        if baseline is not None:
+            self._memory_metrics["host_peak_delta_bytes"] = max(
+                0,
+                self._memory_metrics["host_peak_bytes"] - baseline,
+            )
+
+    def _discover_cgroup_memory_path(self) -> None:
+        self._cgroup_memory_current_path = None
+        if os.name != "posix":
+            return
+        unit_name = None
+        marker = "Running as unit:"
+        for diagnostic in reversed(self.diagnostics):
+            if marker in diagnostic:
+                unit_name = diagnostic.split(marker, 1)[1].split(";", 1)[0].strip()
+                break
+        if not unit_name:
+            return
+        result = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                unit_name,
+                "-p",
+                "ControlGroup",
+                "--value",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        control_group = result.stdout.strip()
+        if result.returncode != 0 or not control_group:
+            return
+        memory_path = (
+            Path("/sys/fs/cgroup")
+            / control_group.lstrip("/")
+            / "memory.current"
+        )
+        if memory_path.exists():
+            self._cgroup_memory_current_path = memory_path
+
+    @property
+    def last_memory_metrics(self) -> Dict[str, Any]:
+        return dict(self._memory_metrics)
+
+    def _raise_if_memory_limit_exceeded(self) -> None:
+        if self._memory_limit_bytes is None:
+            return
+        resident_bytes = self._worker_resident_bytes()
+        if resident_bytes is None or resident_bytes <= self._memory_limit_bytes:
+            return
+        self._kill_process_tree()
+        gib = 1024 ** 3
+        raise BenchmarkWorkerOOM(
+            f"{self.library_name}: worker used {resident_bytes / gib:.2f} GiB, "
+            f"exceeding the {self._memory_limit_bytes / gib:.2f} GiB limit"
+        )
 
     @staticmethod
     def _read_output(stdout, output_queue: queue.Queue) -> None:
@@ -690,6 +879,7 @@ class PythonAdapterWorker:
     def _start(self) -> None:
         if self.process is not None:
             return
+        self.diagnostics = []
         script_path, command, env = prepare_python_adapter_process(
             self.library_name,
             self.library_config,
@@ -700,6 +890,37 @@ class PythonAdapterWorker:
             str(PYTHON_ADAPTER_WORKER),
             str(script_path),
         ])
+        if os.name == "posix" and self._memory_limit_bytes is not None:
+            worker_executable = env.get("UV") if command[0] == "uv" else None
+            if worker_executable is None:
+                worker_executable = shutil.which(command[0], path=env.get("PATH"))
+            if worker_executable is not None:
+                command[0] = worker_executable
+            systemd_run = shutil.which("systemd-run", path=env.get("PATH"))
+            if systemd_run is not None:
+                changed_environment = [
+                    f"--setenv={key}={value}"
+                    for key, value in sorted(env.items())
+                    if (
+                        os.environ.get(key) != value
+                        or key == "UV_PROJECT_ENVIRONMENT"
+                    )
+                ]
+                command = [
+                    systemd_run,
+                    "--user",
+                    "--pipe",
+                    "--wait",
+                    "--collect",
+                    f"--working-directory={REPO_ROOT}",
+                    "-p",
+                    f"MemoryMax={self._memory_limit_bytes}",
+                    "-p",
+                    "MemorySwapMax=0",
+                    *changed_environment,
+                    "--",
+                    *command,
+                ]
         popen_kwargs = {}
         if os.name == "posix":
             popen_kwargs["start_new_session"] = True
@@ -734,8 +955,12 @@ class PythonAdapterWorker:
             )
         if self.scope is None:
             self.scope = response.get("worker_scope", "backend")
+        if self._measure_memory:
+            self._discover_cgroup_memory_path()
 
     def _task_scope_key(self, task_config: Dict[str, Any]) -> tuple:
+        if task_config.get("memory_benchmark", False):
+            return ("memory_task", json.dumps(task_config, sort_keys=True))
         if self.scope == "backend" or self.scope is None:
             return ("backend",)
         if self.scope == "shape":
@@ -754,11 +979,26 @@ class PythonAdapterWorker:
         )
 
     def run(self, task_config: Dict[str, Any]) -> Any:
+        memory_limit_gb = task_config.get("worker_memory_limit_gb")
+        memory_limit_bytes = (
+            None
+            if memory_limit_gb is None
+            else int(float(memory_limit_gb) * 1024 ** 3)
+        )
         if (
             self.process is not None
             and self.scope_key != self._task_scope_key(task_config)
         ):
             self.close()
+        self._memory_limit_bytes = memory_limit_bytes
+        self._measure_memory = bool(task_config.get("memory_benchmark", False))
+        self._memory_sample_interval_seconds = float(
+            task_config.get("memory_sample_interval_seconds", 0.005)
+        )
+        if self._memory_sample_interval_seconds <= 0:
+            raise ValueError("memory_sample_interval_seconds must be > 0")
+        self._memory_call_active = False
+        self._memory_metrics = {}
         self._start()
         if self.scope_key is None:
             self.scope_key = self._task_scope_key(task_config)
@@ -770,6 +1010,9 @@ class PythonAdapterWorker:
         status = response.get("status")
         if status == "result":
             return response.get("result")
+        memory_metrics = response.get("memory_metrics")
+        if isinstance(memory_metrics, dict):
+            self._memory_metrics.update(memory_metrics)
         raise RuntimeError(
             f"{self.library_name}: adapter task failed: "
             f"{response.get('error', response)}\n"
@@ -799,6 +1042,9 @@ class PythonAdapterWorker:
         self.scope_key = None
         self._output_queue = None
         self._reader_thread = None
+        self._memory_limit_bytes = None
+        self._memory_call_active = False
+        self._cgroup_memory_current_path = None
 
 
 def run_python_adapter(
@@ -971,13 +1217,17 @@ def build_task_config(
         "warmup_iterations",
         "timing_statistic",
         "call_timeout_seconds",
+        "worker_memory_limit_gb",
         "clear_input_caches_after_task",
     ):
         if key in sweep:
             task_config[key] = sweep[key]
-    task_config.update(
+    library_task_config = dict(
         sweep.get("library_configs", {}).get(library_name, {})
     )
+    backend_configs = library_task_config.pop("backend_configs", {})
+    task_config.update(library_task_config)
+    task_config.update(backend_configs.get(backend_name, {}))
     return task_config
 
 
@@ -1607,6 +1857,9 @@ def run_orchestrator(
     call_timeout_seconds = sweep.get("call_timeout_seconds")
     if call_timeout_seconds is not None and float(call_timeout_seconds) <= 0:
         raise ValueError("call_timeout_seconds must be > 0")
+    worker_memory_limit_gb = sweep.get("worker_memory_limit_gb")
+    if worker_memory_limit_gb is not None and float(worker_memory_limit_gb) <= 0:
+        raise ValueError("worker_memory_limit_gb must be > 0")
     runs_dir = REPO_ROOT / sweep.get("runs_dir", "runs")
 
     if resume_dir is None:
@@ -1679,6 +1932,8 @@ def run_orchestrator(
         print(f"Adaptive minimum time: {float(adaptive_min_time_ms):g} ms")
     if call_timeout_seconds is not None:
         print(f"Call timeout: {float(call_timeout_seconds):g} seconds")
+    if worker_memory_limit_gb is not None:
+        print(f"Worker memory limit: {float(worker_memory_limit_gb):g} GiB")
     print(f"Seed: {seed}")
     print(f"Libraries: {list(libraries)}")
     print("=" * 60)

@@ -79,6 +79,64 @@ def test_python_adapter_expands_repo_root_in_environment(tmp_path, monkeypatch):
     assert captured["EXAMPLE_PATH"] == str(tmp_path / "dependency")
 
 
+def test_python_adapter_expands_cpu_count_in_environment(tmp_path, monkeypatch):
+    script = tmp_path / "adapter.py"
+    script.write_text("", encoding="utf-8")
+    monkeypatch.setattr(orchestrator, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(orchestrator.os, "cpu_count", lambda: 12)
+    monkeypatch.setattr(orchestrator, "ensure_compatibility_wheel", lambda *args: None)
+
+    _, _, env = orchestrator.prepare_python_adapter_process(
+        "example",
+        {"script": "adapter.py"},
+        {"OMP_NUM_THREADS": "{cpu_count}"},
+    )
+
+    assert env["OMP_NUM_THREADS"] == "12"
+
+
+def test_build_task_config_applies_only_matching_backend_config():
+    sweep = {
+        "library_configs": {
+            "example": {
+                "shared": "value",
+                "backend_configs": {
+                    "cpu": {"n_jobs": -1},
+                },
+            },
+        },
+    }
+    kwargs = {
+        "N": 10,
+        "d": 2,
+        "m": 3,
+        "path_kind": "brownian",
+        "operation": "signature",
+        "repeats": 3,
+        "batch_size": 4,
+        "seed": 1,
+    }
+
+    cpu = orchestrator.build_task_config(
+        sweep,
+        "example",
+        backend_name="cpu",
+        **kwargs,
+    )
+    gpu = orchestrator.build_task_config(
+        sweep,
+        "example",
+        backend_name="gpu",
+        **kwargs,
+    )
+
+    assert cpu["shared"] == "value"
+    assert cpu["n_jobs"] == -1
+    assert "backend_configs" not in cpu
+    assert gpu["shared"] == "value"
+    assert "n_jobs" not in gpu
+
+
 def test_python_worker_reuses_process_and_recovers_after_task_error(tmp_path):
     adapter_path = tmp_path / "adapter.py"
     adapter_path.write_text(
@@ -201,6 +259,128 @@ def test_worker_times_out_an_active_kernel_call(monkeypatch):
     assert killed == [True]
 
 
+def test_worker_memory_limit_kills_only_worker_and_reports_oom(monkeypatch):
+    class FakeProcess:
+        pid = 123
+
+        @staticmethod
+        def poll():
+            return None
+
+    worker = orchestrator.PythonAdapterWorker("example", {})
+    worker.process = FakeProcess()
+    worker._output_queue = orchestrator.queue.Queue()
+    worker._memory_limit_bytes = 1024
+    monkeypatch.setattr(worker, "_worker_resident_bytes", lambda: 2048)
+    killed = []
+    monkeypatch.setattr(
+        worker,
+        "_kill_process_tree",
+        lambda: killed.append(True),
+    )
+
+    with pytest.raises(orchestrator.BenchmarkWorkerOOM, match="exceeding"):
+        worker._read_response()
+
+    assert killed == [True]
+
+
+def test_sigkill_is_reported_as_worker_oom():
+    class FakeProcess:
+        @staticmethod
+        def poll():
+            return -orchestrator.WORKER_SIGKILL
+
+    worker = orchestrator.PythonAdapterWorker("example", {})
+    worker.process = FakeProcess()
+    worker._output_queue = orchestrator.queue.Queue()
+    worker._output_queue.put(None)
+
+    with pytest.raises(orchestrator.BenchmarkWorkerOOM, match="SIGKILL"):
+        worker._read_response()
+
+
+def test_cgroup_oom_diagnostic_is_reported_as_worker_oom():
+    class FakeProcess:
+        @staticmethod
+        def poll():
+            return 1
+
+    worker = orchestrator.PythonAdapterWorker("example", {})
+    worker.process = FakeProcess()
+    worker.diagnostics = ["Finished with result: oom-kill"]
+    worker._output_queue = orchestrator.queue.Queue()
+    worker._output_queue.put(None)
+
+    with pytest.raises(orchestrator.BenchmarkWorkerOOM, match="likely due to OOM"):
+        worker._read_response()
+
+
+def test_cgroup_worker_forwards_changed_environment(monkeypatch):
+    captured = {}
+    script_path = Path("adapter.py")
+    monkeypatch.setenv(
+        "UV_PROJECT_ENVIRONMENT",
+        "/home/test/benchmark-venv",
+    )
+
+    class FakeProcess:
+        stdout = io.StringIO()
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["env"] = kwargs["env"]
+        return FakeProcess()
+
+    monkeypatch.setattr(orchestrator.os, "name", "posix")
+    monkeypatch.setattr(
+        orchestrator,
+        "prepare_python_adapter_process",
+        lambda *args: (
+            script_path,
+            ["uv", "run"],
+            {
+                "PATH": "/usr/bin",
+                "PYTHONPATH": "/tmp/adapter-package",
+                "UV": "/opt/uv/bin/uv",
+                "UV_PROJECT_ENVIRONMENT": "/home/test/benchmark-venv",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator.shutil,
+        "which",
+        lambda command, **kwargs: f"/usr/bin/{command}",
+    )
+    monkeypatch.setattr(orchestrator.subprocess, "Popen", fake_popen)
+
+    worker = orchestrator.PythonAdapterWorker("example", {})
+    worker._memory_limit_bytes = 1024
+    monkeypatch.setattr(worker, "_read_response", lambda: {"status": "ready"})
+    worker._start()
+
+    assert "--setenv=PYTHONPATH=/tmp/adapter-package" in captured["command"]
+    assert (
+        "--setenv=UV_PROJECT_ENVIRONMENT=/home/test/benchmark-venv"
+        in captured["command"]
+    )
+    assert "/opt/uv/bin/uv" in captured["command"]
+    assert captured["env"]["PYTHONPATH"] == "/tmp/adapter-package"
+
+
+def test_worker_memory_limit_does_not_change_task_identity():
+    config = {"N": 1000, "d": 4, "m": 3, "operation": "signature"}
+
+    without_limit = orchestrator.make_task_id("example", "cpu", config)
+    with_limit = orchestrator.make_task_id(
+        "example",
+        "cpu",
+        {**config, "worker_memory_limit_gb": 24},
+    )
+
+    assert with_limit == without_limit
+
+
 def test_shape_scoped_worker_reuses_only_matching_shapes():
     worker = orchestrator.PythonAdapterWorker(
         "example",
@@ -224,6 +404,55 @@ def test_shape_scoped_worker_reuses_only_matching_shapes():
         **base,
         "d": 8,
     })
+
+
+def test_shape_restart_preserves_worker_memory_limit(monkeypatch):
+    worker = orchestrator.PythonAdapterWorker(
+        "example",
+        {"worker_scope": "shape"},
+    )
+    worker.process = object()
+    worker.scope_key = ("shape", 16, 2, 1, "brownian", 0)
+    observed_limits = []
+
+    def fake_close():
+        worker.process = None
+        worker.scope_key = None
+        worker._memory_limit_bytes = None
+
+    class FakeStdin:
+        def write(self, value):
+            pass
+
+        def flush(self):
+            pass
+
+    class FakeProcess:
+        stdin = FakeStdin()
+
+    def fake_start():
+        observed_limits.append(worker._memory_limit_bytes)
+        worker.process = FakeProcess()
+
+    monkeypatch.setattr(worker, "close", fake_close)
+    monkeypatch.setattr(worker, "_start", fake_start)
+    monkeypatch.setattr(
+        worker,
+        "_read_response",
+        lambda: {"status": "result", "result": {}},
+    )
+
+    worker.run({
+        "N": 32,
+        "d": 4,
+        "m": 2,
+        "batch_size": 1,
+        "path_kind": "brownian",
+        "seed": 0,
+        "worker_memory_limit_gb": 16,
+    })
+
+    assert observed_limits == [16 * 1024 ** 3]
 
 
 def test_orchestrator_passes_one_worker_to_all_backend_tasks(tmp_path, monkeypatch):

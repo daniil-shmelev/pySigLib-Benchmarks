@@ -72,11 +72,13 @@ def main() -> int:
         "worker_scope": getattr(adapter_class, "WORKER_SCOPE", "backend"),
     })
     for line in sys.stdin:
+        adapter = None
         try:
             config = json.loads(line)
             config["_call_event_callback"] = send_response
             try:
-                result = adapter_class(config)._run_benchmark()
+                adapter = adapter_class(config)
+                result = adapter._run_benchmark()
             finally:
                 if config.get("clear_input_caches_after_task", False):
                     clear_cached_inputs()
@@ -86,6 +88,11 @@ def main() -> int:
                 "status": "error",
                 "error": str(error),
                 "traceback": traceback.format_exc(),
+                "memory_metrics": (
+                    getattr(adapter, "_memory_metrics", {})
+                    if adapter is not None
+                    else {}
+                ),
             })
 
     return 0

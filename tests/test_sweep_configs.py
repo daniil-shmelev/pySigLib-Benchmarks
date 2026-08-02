@@ -25,7 +25,6 @@ BACKPROP_OPERATIONS = {
     "signaturekernel_backprop",
 }
 PAPER_SIGNATURE_LIBRARIES = {
-    "iisignature",
     "log-signatures-pytorch",
     "signatory",
     "pathsig",
@@ -38,6 +37,14 @@ PAPER_SIGNATURE_LIBRARIES = {
 PAPER_LOGSIGNATURE_LIBRARIES = PAPER_SIGNATURE_LIBRARIES - {"keras_sig"}
 PAPER_BRANCHED_LIBRARIES = {"pysiglib", "stochastax"}
 PAPER_KERNEL_LIBRARIES = {"pysiglib", "polysigkernel"}
+PAPER_JAX_LIBRARIES = {
+    "polysigkernel",
+    "stochastax",
+    "signax",
+    "tensordev",
+    "keras_sig",
+}
+PAPER_TORCH_CPU_LIBRARIES = {"log-signatures-pytorch", "signatory"}
 
 
 def _load_yaml(name: str) -> dict:
@@ -85,6 +92,7 @@ def _assert_paper_settings(paper: dict, expected_N: int = 1000) -> None:
     assert paper["repeats"] == 3
     assert paper["warmup_iterations"] == 1
     assert paper["timing_statistic"] == "min"
+    assert paper["worker_memory_limit_gb"] == 16
     assert "call_timeout_seconds" not in paper
     assert paper["clear_input_caches_after_task"] is True
 
@@ -127,3 +135,29 @@ def test_problem_specific_paper_sweeps():
         operations = set(paper["operations"])
         for library_name in paper["libraries"]:
             assert operations <= set(registry[library_name]["operations"])
+
+        pysiglib_config = paper["library_configs"]["pysiglib"]
+        assert pysiglib_config["backend_configs"]["cpu"]["n_jobs"] == -1
+
+
+def test_paper_cpu_frameworks_enable_all_available_threads():
+    registry = _load_yaml("libraries_registry.yaml")["libraries"]
+
+    for library_name in PAPER_JAX_LIBRARIES:
+        cpu_backend = next(
+            backend
+            for backend in registry[library_name]["backends"]
+            if backend["name"] == "cpu"
+        )
+        xla_flags = cpu_backend["env"]["XLA_FLAGS"]
+        assert "--xla_cpu_multi_thread_eigen=true" in xla_flags
+        assert "intra_op_parallelism_threads={cpu_count}" in xla_flags
+
+    for library_name in PAPER_TORCH_CPU_LIBRARIES:
+        cpu_backend = next(
+            backend
+            for backend in registry[library_name]["backends"]
+            if backend["name"] == "cpu"
+        )
+        assert cpu_backend["env"]["OMP_NUM_THREADS"] == "{cpu_count}"
+        assert cpu_backend["env"]["MKL_NUM_THREADS"] == "{cpu_count}"

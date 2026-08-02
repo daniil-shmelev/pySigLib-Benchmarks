@@ -43,6 +43,21 @@ uv run run_paper_branched_signatures.py
 uv run run_paper_signature_kernels.py
 ```
 
+Run the signature memory benchmark separately:
+
+```bash
+uv run run_paper_signature_memory.py
+```
+
+It performs one warmup followed by one monitored call per cell. Results are
+written to `runs/signature_memory_TIMESTAMP/memory_results.csv`. Host columns
+report total and baseline-relative cgroup or process-tree memory. GPU columns
+report allocator memory from PyTorch or JAX. Resume an interrupted run with
+`uv run run_paper_signature_memory.py --resume RUN_DIRECTORY`.
+
+Use `uv run src/memory_benchmark.py config/memory_smoke.yaml` for a minimal
+CPU smoke test.
+
 Each runner records benchmark and plotting wall time in a JSON summary under
 `runs/` and generates heatmaps for its result directory.
 

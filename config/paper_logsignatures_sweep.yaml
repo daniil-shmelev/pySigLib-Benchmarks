@@ -1,7 +1,6 @@
 # Forward and backward log-signature sweep for the pySigLib paper.
 
 libraries:
-    - iisignature
     - log-signatures-pytorch
     - signatory
     - pathsig
@@ -29,8 +28,15 @@ batch_size: 256
 repeats: 3
 warmup_iterations: 1
 timing_statistic: "min"
+worker_memory_limit_gb: 16
 clear_input_caches_after_task: true
 
 logsig_method: "S"
+
+library_configs:
+    pysiglib:
+        backend_configs:
+            cpu:
+                n_jobs: -1
 
 runs_dir: "runs"

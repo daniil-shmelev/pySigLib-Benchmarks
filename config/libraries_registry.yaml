@@ -35,6 +35,7 @@ libraries:
 
   log-signatures-pytorch:
     type: python
+    memory_framework: torch
     script: "adapters/python/run_log_signatures_pytorch.py"
     extras:
       - log-signatures-pytorch
@@ -45,6 +46,9 @@ libraries:
       url: "https://files.pythonhosted.org/packages/b1/fa/c1db4a19fc3d277371bc43db96cd01794bdf39dbb99c5a50a2b0678da1c5/log_signatures_pytorch-0.1.11-py3-none-any.whl#sha256=86f38e0b9453a9ac02e818a4f49b8aaf5020f7f790318504515550d0ef726921"
     backends:
       - name: cpu
+        env:
+          OMP_NUM_THREADS: "{cpu_count}"
+          MKL_NUM_THREADS: "{cpu_count}"
       - name: gpu
     operations:
       - signature
@@ -54,11 +58,15 @@ libraries:
 
   signatory:
     type: python
+    memory_framework: torch
     script: "adapters/python/run_signatory.py"
     extras:
       - signatory
     backends:
       - name: cpu
+        env:
+          OMP_NUM_THREADS: "{cpu_count}"
+          MKL_NUM_THREADS: "{cpu_count}"
       - name: gpu
     operations:
       - signature
@@ -68,6 +76,7 @@ libraries:
 
   pathsig:
     type: python
+    memory_framework: torch
     script: "adapters/python/run_pathsig.py"
     extras:
       - pathsig
@@ -104,6 +113,7 @@ libraries:
 
   polysigkernel:
     type: python
+    memory_framework: jax
     script: "adapters/python/run_polysigkernel.py"
     extras:
       - polysigkernel
@@ -111,6 +121,7 @@ libraries:
       - name: cpu
         env:
           JAX_PLATFORM_NAME: cpu
+          XLA_FLAGS: "--xla_cpu_multi_thread_eigen=true intra_op_parallelism_threads={cpu_count}"
       - name: gpu
         env:
           JAX_PLATFORM_NAME: gpu
@@ -120,6 +131,7 @@ libraries:
 
   stochastax:
     type: python
+    memory_framework: jax
     script: "adapters/python/run_stochastax.py"
     extras:
       - stochastax
@@ -127,6 +139,7 @@ libraries:
       - name: cpu
         env:
           JAX_PLATFORM_NAME: cpu
+          XLA_FLAGS: "--xla_cpu_multi_thread_eigen=true intra_op_parallelism_threads={cpu_count}"
       - name: gpu
         env:
           JAX_PLATFORM_NAME: gpu
@@ -142,6 +155,7 @@ libraries:
 
   signax:
     type: python
+    memory_framework: jax
     script: "adapters/python/run_signax.py"
     extras:
       - signax
@@ -149,6 +163,7 @@ libraries:
       - name: cpu
         env:
           JAX_PLATFORM_NAME: cpu
+          XLA_FLAGS: "--xla_cpu_multi_thread_eigen=true intra_op_parallelism_threads={cpu_count}"
       - name: gpu
         env:
           JAX_PLATFORM_NAME: gpu
@@ -160,6 +175,7 @@ libraries:
 
   tensordev:
     type: python
+    memory_framework: jax
     script: "adapters/python/run_tensordev.py"
     extras:
       - tensordev
@@ -167,6 +183,7 @@ libraries:
       - name: cpu
         env:
           JAX_PLATFORM_NAME: cpu
+          XLA_FLAGS: "--xla_cpu_multi_thread_eigen=true intra_op_parallelism_threads={cpu_count}"
       - name: gpu
         env:
           JAX_PLATFORM_NAME: gpu
@@ -178,6 +195,7 @@ libraries:
 
   keras_sig:
     type: python
+    memory_framework: jax
     script: "adapters/python/run_keras_sig.py"
     extras:
       - keras-sig
@@ -185,6 +203,7 @@ libraries:
       - name: cpu
         env:
           JAX_PLATFORM_NAME: cpu
+          XLA_FLAGS: "--xla_cpu_multi_thread_eigen=true intra_op_parallelism_threads={cpu_count}"
       - name: gpu
         env:
           JAX_PLATFORM_NAME: gpu

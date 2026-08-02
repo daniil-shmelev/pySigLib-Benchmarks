@@ -274,12 +274,29 @@ def _annotate_heatmap(
     ax: Any,
     matrix: np.ndarray,
     norm: LogNorm,
+    failure_labels: Optional[np.ndarray] = None,
     fontsize: int = 10,
 ) -> None:
     """Add runtime text labels to heatmap cells."""
     for i in range(matrix.shape[0]):
         for j in range(matrix.shape[1]):
-            if not np.isnan(matrix[i, j]):
+            failure_label = (
+                failure_labels[i, j]
+                if failure_labels is not None
+                else ""
+            )
+            if failure_label:
+                ax.text(
+                    j,
+                    i,
+                    failure_label,
+                    ha="center",
+                    va="center",
+                    color="#991B1B",
+                    fontsize=fontsize,
+                    fontweight="semibold",
+                )
+            elif not np.isnan(matrix[i, j]):
                 normalized = float(norm(matrix[i, j])) if matrix[i, j] > 0.0 else 0.0
                 color = "black" if normalized > 0.55 else "white"
                 ax.text(
@@ -329,6 +346,29 @@ def make_heatmap_plot(
         Path to saved plot
     """
     rows = _rows_for_operation(load_results(csv_path), operation, backend)
+    oom_failures = set()
+    failed_tasks_path = csv_path.parent / "failed_tasks.csv"
+    if failed_tasks_path.exists():
+        with failed_tasks_path.open("r", encoding="utf-8", newline="") as f:
+            for failure in csv.DictReader(f):
+                error_text = " ".join([
+                    failure.get("error_type", ""),
+                    failure.get("reason", ""),
+                ]).lower()
+                if not (
+                    "oom" in error_text
+                    or "out of memory" in error_text
+                    or "memoryerror" in error_text
+                ):
+                    continue
+                oom_failures.add((
+                    failure.get("operation", "").strip(),
+                    failure.get("backend", "").strip(),
+                    int(failure["m"]),
+                    int(failure["N"]),
+                    int(failure["d"]),
+                    failure.get("library", "").strip(),
+                ))
 
     if not rows:
         raise ValueError("No benchmark results found in CSV")
@@ -368,6 +408,11 @@ def make_heatmap_plot(
                 library_title, show_library_axis = _format_heatmap_library_axis(libraries)
 
                 matrix = np.full((len(params), len(libraries)), np.nan)
+                failure_labels = np.full(
+                    (len(params), len(libraries)),
+                    "",
+                    dtype=object,
+                )
                 result_by_key = {}
                 for r in op_rows:
                     result_by_key.setdefault(
@@ -379,6 +424,15 @@ def make_heatmap_plot(
                         t_ms = result_by_key.get((N, d, series_key))
                         if t_ms is not None:
                             matrix[row_idx, col_idx] = t_ms
+                        elif (
+                            operation,
+                            backend,
+                            m,
+                            N,
+                            d,
+                            series_key[0],
+                        ) in oom_failures:
+                            failure_labels[row_idx, col_idx] = "OOM"
 
                 finite_values = matrix[np.isfinite(matrix)]
                 norm = _heatmap_color_scale([float(v) for v in finite_values])
@@ -409,6 +463,7 @@ def make_heatmap_plot(
                     ),
                     "title_parts": title_parts,
                     "matrix": matrix,
+                    "failure_labels": failure_labels,
                     "norm": norm,
                 })
 
@@ -440,15 +495,22 @@ def make_heatmap_plot(
         ax = axes[panel["axis_row"]][panel["op_idx"]]
         ax.set_visible(True)
 
+        cmap = plt.get_cmap("viridis").copy()
+        cmap.set_bad(color="#E5E7EB")
         im = ax.imshow(
             panel["matrix"],
             aspect="auto",
-            cmap="viridis",
+            cmap=cmap,
             interpolation="nearest",
             norm=panel["norm"],
         )
         _configure_heatmap_axes(ax, panel, show_titles)
-        _annotate_heatmap(ax, panel["matrix"], panel["norm"])
+        _annotate_heatmap(
+            ax,
+            panel["matrix"],
+            panel["norm"],
+            panel["failure_labels"],
+        )
         cbar = fig.colorbar(im, ax=ax, location="right")
         cbar.formatter = NUMBER_FORMATTER
         cbar.update_ticks()

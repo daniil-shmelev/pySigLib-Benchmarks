@@ -12,7 +12,9 @@ matplotlib.use("Agg")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+import plotting
 from plotting import (
+    _annotate_heatmap,
     _format_heatmap_library_axis,
     _format_heatmap_param_axis,
     _format_number,
@@ -92,6 +94,26 @@ def test_heatmap_color_scale_ignores_nonpositive_values():
     assert norm.vmax == 3.9
 
 
+def test_annotate_heatmap_labels_oom_failures():
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    fig, ax = plt.subplots()
+    matrix = np.array([[np.nan, 1.0]])
+    failure_labels = np.array([["OOM", ""]], dtype=object)
+
+    _annotate_heatmap(
+        ax,
+        matrix,
+        _heatmap_color_scale([1.0]),
+        failure_labels,
+    )
+
+    assert [text.get_text() for text in ax.texts] == ["OOM", "1"]
+    assert ax.texts[0].get_color() == "#991B1B"
+    plt.close(fig)
+
+
 def test_make_heatmap_plot_saves_one_operation_level_figure(tmp_path):
     csv_path = tmp_path / "results.csv"
     csv_path.write_text(
@@ -118,13 +140,45 @@ def test_make_heatmap_plot_saves_one_operation_level_figure(tmp_path):
     assert not (tmp_path / "plot_heatmaps").exists()
 
 
+def test_make_heatmap_plot_loads_oom_failures(tmp_path, monkeypatch):
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(
+        "\n".join([
+            "N,d,m,batch_size,path_kind,operation,backend,language,library,method,path_type,t_ms,alloc_bytes",
+            "10000,2,3,256,brownian,signature,cpu,python,pysiglib,signature,array,100,0",
+            "10000,2,3,256,brownian,signature,cpu,python,other,signature,array,120,0",
+            "10000,16,3,256,brownian,signature,cpu,python,other,signature,array,140,0",
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / "failed_tasks.csv").write_text(
+        "\n".join([
+            "task_id,library,backend,operation,N,d,m,batch_size,error_type,reason",
+            "id,pysiglib,cpu,signature,10000,16,3,256,BenchmarkWorkerOOM,worker received SIGKILL",
+        ]),
+        encoding="utf-8",
+    )
+    captured_labels = []
+    original_annotate = plotting._annotate_heatmap
+
+    def capture_labels(ax, matrix, norm, failure_labels=None, fontsize=10):
+        captured_labels.append(failure_labels.copy())
+        original_annotate(ax, matrix, norm, failure_labels, fontsize)
+
+    monkeypatch.setattr(plotting, "_annotate_heatmap", capture_labels)
+
+    make_heatmap_plot(csv_path, tmp_path / "heatmap.png")
+
+    assert any((labels == "OOM").any() for labels in captured_labels)
+
+
 def test_plot_series_keep_cpu_and_gpu_variants_distinct(tmp_path):
     csv_path = tmp_path / "results.csv"
     csv_path.write_text(
         "\n".join([
             "N,d,m,batch_size,path_kind,operation,backend,language,library,method,path_type,t_ms,alloc_bytes",
-            "32,2,2,256,fbm,signature,cpu,python,pysiglib,signature,jax.Array,1.0,0",
-            "32,2,2,256,fbm,signature,gpu,python,pysiglib,signature,jax.Array,0.5,0",
+            "32,2,2,256,fbm,signature,cpu,python,pysiglib,signature,numpy.ndarray,1.0,0",
+            "32,2,2,256,fbm,signature,gpu,python,pysiglib,signature,torch.Tensor,0.5,0",
         ]),
         encoding="utf-8",
     )
