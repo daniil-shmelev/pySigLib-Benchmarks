@@ -6,6 +6,9 @@ resolution-markers = [
     "sys_platform != 'win32'",
 ]
 
+[manifest]
+constraints = [{ name = "pysiglib-cuda", specifier = "==4.0.0rc1" }]
+
 [[package]]
 name = "absl-py"
 version = "2.4.0"
@@ -387,9 +390,9 @@ wheels = [
 
 [[package]]
 name = "kauri"
-version = "2.2.0"
+version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/52/68/4194d1da4982650c2545b44b60ac2b86aa12ff0d4d387798289b9684cf0e/kauri-2.2.0.tar.gz", hash = "sha256:3ea3f69650631fe4a3aa2ca84a260b2cd00b87d08acf0ea4accb5d045e1cfb70", size = 82962, upload-time = "2026-05-18T14:52:50.941Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/ea/c8ddeb111c993c664a356d8550a290f999f620394cc4028c352d6130d0da/kauri-2.3.0.tar.gz", hash = "sha256:fad55b33622998c5341cbc4c1d75686501948e2358d6153a7c5e132e7405f7da", size = 83353, upload-time = "2026-06-04T13:30:07.665Z" }
 
 [[package]]
 name = "keras"
@@ -1068,7 +1071,7 @@ wheels = [
 
 [[package]]
 name = "pysiglib"
-version = "3.0.3"
+version = "4.0.0rc1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "kauri" },
@@ -1077,9 +1080,9 @@ dependencies = [
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "sys_platform == 'win32'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2c/f6/75436bf0cd625de8bd34e027af2381534145d31dd952e22a822429363a42/pysiglib-3.0.3-py3-none-macosx_11_0_arm64.whl", hash = "sha256:2c35a476995222c7731383235d7f80835231b27ebb96a2a17c072d0069d4a917", size = 494239, upload-time = "2026-05-16T09:51:51.559Z" },
-    { url = "https://files.pythonhosted.org/packages/3c/47/c6093b017a9e47acad027f97d5510758ca7a0f165b7f625f54b809a1233a/pysiglib-3.0.3-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2f96ad02f958ec2d7b00bff4096bb8a283b8e61adeb816a7fd1c322b82b5bb64", size = 790727, upload-time = "2026-05-16T09:51:53.265Z" },
-    { url = "https://files.pythonhosted.org/packages/66/d4/6926ae17c67a57615602bd0e34f61ce55e249c2e074f77e0fc1d8f3835f7/pysiglib-3.0.3-py3-none-win_amd64.whl", hash = "sha256:51b65c25e491605214ecc586e200029f2eefe6eec3e55edf0317d3d807e39bf2", size = 743756, upload-time = "2026-05-16T09:51:55.021Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/6c/a62929b5fcf7f0647760d98c61e11f3e1b0d133f996085f314a2bde0033d/pysiglib-4.0.0rc1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:6b033392e9425be70429f151215cf9570085cdbe50dadef78680f1f89c253c6a", size = 909123, upload-time = "2026-08-02T17:25:28.229Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/d8/68b5e85cb1ec6897f16fb7f233f37d3ec4d1f882818b25a325991ab54368/pysiglib-4.0.0rc1-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5aa0a27ce13381684ef09bac5188ed840c915b1d63fe7b14976494a225251958", size = 1452770, upload-time = "2026-08-02T17:25:29.954Z" },
+    { url = "https://files.pythonhosted.org/packages/81/45/7e3029875de5cd182980b415e4b29e4418134de7d3b58c3664aefb2606c1/pysiglib-4.0.0rc1-py3-none-win_amd64.whl", hash = "sha256:6f5c678b26446a4d0cf5ca706a3bcd0c41273d9a6894fee3a72ba862149aa470", size = 1238273, upload-time = "2026-08-02T17:25:31.61Z" },
 ]
 
 [package.optional-dependencies]
@@ -1089,14 +1092,14 @@ cuda = [
 
 [[package]]
 name = "pysiglib-cuda"
-version = "3.0.3"
+version = "4.0.0rc1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pysiglib" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/78/ac/b3867ea5a574b3ceda12635597c1009b700798a0fbd9fd1d3ea573e3bc56/pysiglib_cuda-3.0.3-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d30feac0e82d91e18684809f5146af0b88e01bbb73bca0fcde91f5f356c62607", size = 42750857, upload-time = "2026-05-16T09:52:17.124Z" },
-    { url = "https://files.pythonhosted.org/packages/07/f8/ac46f837df1be5a2485416a5be1f5808aae3bdbbbf70458ecdb7b5216d85/pysiglib_cuda-3.0.3-py3-none-win_amd64.whl", hash = "sha256:47b8795dd977277bc799e2d0a757aa0ff19ca3a33b3c04dc1650ef36db252343", size = 42689226, upload-time = "2026-05-16T09:52:23.25Z" },
+    { url = "https://files.pythonhosted.org/packages/35/b9/2b275464eac9a25e8ae7c3342b5e0392cb6557c318b0c33c8bed9f6e7bb5/pysiglib_cuda-4.0.0rc1-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:31370e84cb157dfa0f288026f644ab1690c1db56cb38e665c38682461894d1f7", size = 71731745, upload-time = "2026-08-02T17:26:08.119Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/cb/fb14990ac89a73e82e2a3672449f8e607691b13b1824f6794d7ef2e6a652/pysiglib_cuda-4.0.0rc1-py3-none-win_amd64.whl", hash = "sha256:16f95771fb6251dc00df900e237e5dcfef2b78eff0fe1899bf6de1aa60c53d6a", size = 71566512, upload-time = "2026-08-02T17:26:12.827Z" },
 ]
 
 [[package]]
@@ -1319,8 +1322,8 @@ requires-dist = [
     { name = "pathsig", marker = "extra == 'all'", specifier = "==0.2.1" },
     { name = "pathsig", marker = "extra == 'pathsig'", specifier = "==0.2.1" },
     { name = "polysigkernel", marker = "extra == 'polysigkernel'", git = "https://github.com/luke-a-thompson/polysigkernel.git?rev=807234d4ffc7e123cd3392b78e763c6a41269384" },
-    { name = "pysiglib", extras = ["cuda"], marker = "extra == 'all'", specifier = ">=3.0.3" },
-    { name = "pysiglib", extras = ["cuda"], marker = "extra == 'pysiglib'", specifier = ">=3.0.3" },
+    { name = "pysiglib", extras = ["cuda"], marker = "extra == 'all'", specifier = "==4.0.0rc1" },
+    { name = "pysiglib", extras = ["cuda"], marker = "extra == 'pysiglib'", specifier = "==4.0.0rc1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "roughpy", marker = "extra == 'all'", specifier = "==0.3.0" },
     { name = "roughpy", marker = "extra == 'roughpy'", specifier = "==0.3.0" },

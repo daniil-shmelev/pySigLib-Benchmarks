@@ -39,7 +39,7 @@ pathsig = [
     "torch>=2.4",
 ]
 pysiglib = [
-    "pysiglib[cuda]>=3.0.3",
+    "pysiglib[cuda]==4.0.0rc1",
     "torch>=2.9.1",
 ]
 stochastax = [
@@ -68,7 +68,7 @@ all = [
     "cmake>=3.24",
     "jax[cuda]",
     "ninja>=1.11",
-    "pysiglib[cuda]>=3.0.3",
+    "pysiglib[cuda]==4.0.0rc1",
     "pathsig==0.2.1",
     "RoughPy==0.3.0",
     "scikit-build-core>=0.10",
@@ -97,6 +97,7 @@ iisignature = ["numpy"]
 signatory = [{ requirement = "torch", match-runtime = true }]
 
 [tool.uv]
+constraint-dependencies = ["pysiglib-cuda==4.0.0rc1"]
 no-build-isolation-package = ["pathsig"]
 
 [[tool.uv.index]]
