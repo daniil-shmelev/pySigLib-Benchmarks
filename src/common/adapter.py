@@ -8,12 +8,29 @@ import statistics
 import sys
 import time
 import tracemalloc
+from collections import OrderedDict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from .paths import make_path, make_path_batch
+
+
+@lru_cache(maxsize=4)
+def _load_stochastic_input(cache_path: str) -> np.ndarray:
+    return np.load(cache_path, allow_pickle=False)
+
+
+_PREPARED_INPUTS: OrderedDict[tuple[str, int], tuple[np.ndarray, Any]] = OrderedDict()
+_MAX_PREPARED_INPUTS = 8
+
+
+def clear_cached_inputs() -> None:
+    _load_stochastic_input.cache_clear()
+    _PREPARED_INPUTS.clear()
+    gc.collect()
 
 
 class BenchmarkAdapter:
@@ -37,11 +54,13 @@ class BenchmarkAdapter:
                 - N: Number of path points
                 - d: Dimension
                 - m: Signature truncation level
-                - path_kind: "linear", "sin", or "fbm"
-                - operation: "signature", "logsignature", "sigdiff",
+                - path_kind: "linear", "sin", or "brownian"
+                - operation: "signature", "logsignature", "sig_backprop",
                   "branchedsignature_nonplanar", "branchedsignature_planar",
                   or "signaturekernel"
                 - repeats: Number of timing repetitions
+                - warmup_iterations: Number of untimed warmup iterations
+                - timing_statistic: Summary stored in t_ms ("median" or "min")
                 - batch_size: Number of paths per timed kernel call
                 - backend: Optional backend label, e.g. "cpu" or "gpu"
         """
@@ -54,6 +73,22 @@ class BenchmarkAdapter:
         self.repeats = config["repeats"]
         if self.repeats < 1:
             raise ValueError(f"repeats must be >= 1, got {self.repeats}")
+        self.warmup_iterations = int(config.get("warmup_iterations", 3))
+        if self.warmup_iterations < 0:
+            raise ValueError(
+                "warmup_iterations must be >= 0, "
+                f"got {self.warmup_iterations}"
+            )
+        self.timing_statistic = config.get("timing_statistic", "median")
+        if self.timing_statistic not in ("median", "min"):
+            raise ValueError(
+                "timing_statistic must be 'median' or 'min', "
+                f"got {self.timing_statistic!r}"
+            )
+        self.call_timeout_seconds = config.get("call_timeout_seconds")
+        self._call_event_callback = config.get("_call_event_callback")
+        self.memory_benchmark = bool(config.get("memory_benchmark", False))
+        self._memory_metrics: Dict[str, Any] = {}
         self.batch_size = int(config.get("batch_size", 1))
         if self.batch_size < 1:
             raise ValueError(f"batch_size must be >= 1, got {self.batch_size}")
@@ -61,14 +96,18 @@ class BenchmarkAdapter:
         self.seed = int(config.get("seed", 0))
         self._input_index = 0
 
-    def _cached_fbm_input(self, logical_seed: int) -> Optional[np.ndarray]:
-        """Load a saved fBM input, or generate and save it atomically."""
+    def random_cotangent(self, shape) -> np.ndarray:
+        rng = np.random.default_rng(self.seed)
+        return rng.standard_normal(tuple(shape)).astype(np.float32)
+
+    def _cached_stochastic_input(self, logical_seed: int) -> Optional[np.ndarray]:
+        """Load a saved stochastic input, or generate and save it atomically."""
         cache_dir = self.config.get("input_cache_dir")
-        if cache_dir is None or self.path_kind.lower() != "fbm":
+        if cache_dir is None or self.path_kind.lower() != "brownian":
             return None
 
         cache_path = Path(cache_dir) / (
-            f"fbm_h0p33_seed{logical_seed}_N{self.N}_d{self.d}"
+            f"brownian_seed{logical_seed}_N{self.N}_d{self.d}"
             f"_batch{self.batch_size}.npy"
         )
         checksum_path = cache_path.with_suffix(".npy.sha256")
@@ -95,7 +134,11 @@ class BenchmarkAdapter:
             os.replace(temporary_path, cache_path)
 
         if not checksum_path.exists():
-            digest = hashlib.sha256(cache_path.read_bytes()).hexdigest()
+            digest_builder = hashlib.sha256()
+            with cache_path.open("rb") as cache_file:
+                for chunk in iter(lambda: cache_file.read(1024 * 1024), b""):
+                    digest_builder.update(chunk)
+            digest = digest_builder.hexdigest()
             temporary_checksum = checksum_path.with_name(
                 f".{checksum_path.name}.{os.getpid()}.tmp"
             )
@@ -105,7 +148,7 @@ class BenchmarkAdapter:
             )
             os.replace(temporary_checksum, checksum_path)
 
-        path = np.load(cache_path, allow_pickle=False)
+        path = _load_stochastic_input(str(cache_path.resolve()))
         expected_shape = (
             (self.N, self.d)
             if self.batch_size == 1
@@ -118,15 +161,35 @@ class BenchmarkAdapter:
             )
         return path
 
+    def cached_prepared_input(
+        self,
+        namespace: str,
+        path: np.ndarray,
+        prepare: Callable[[], Any],
+    ) -> Any:
+        """Reuse a host or device input while its source path remains cached."""
+        key = (namespace, id(path))
+        cached = _PREPARED_INPUTS.get(key)
+        if cached is not None and cached[0] is path:
+            _PREPARED_INPUTS.move_to_end(key)
+            return cached[1]
+
+        prepared = prepare()
+        _PREPARED_INPUTS[key] = (path, prepared)
+        _PREPARED_INPUTS.move_to_end(key)
+        while len(_PREPARED_INPUTS) > _MAX_PREPARED_INPUTS:
+            _PREPARED_INPUTS.popitem(last=False)
+        return prepared
+
     def make_path_input(self):
         """Generate this benchmark's input path, batched when requested."""
-        # fbm uses NumPy's legacy global RNG internally. Reset it for each
+        # Stochastic generators use NumPy's global RNG. Reset it for each
         # logical input so every library/backend receives the same path data.
         logical_seed = self.seed + self._input_index
         np.random.seed(logical_seed)
         self._input_index += 1
 
-        cached_path = self._cached_fbm_input(logical_seed)
+        cached_path = self._cached_stochastic_input(logical_seed)
         if cached_path is not None:
             return cached_path
 
@@ -137,7 +200,7 @@ class BenchmarkAdapter:
     def manual_timing_loop(
         self,
         func: Callable[[], Any],
-        warmup_iterations: int = 3
+        warmup_iterations: Optional[int] = None,
     ) -> Tuple[float, int, List[float]]:
         """
         Execute manual timing loop with warmup and GC disabled.
@@ -147,14 +210,73 @@ class BenchmarkAdapter:
             warmup_iterations: Number of warmup runs before timing
 
         Returns:
-            Tuple of (median_time_ms, alloc_bytes, samples_ms):
-                - median_time_ms: Median time per iteration in milliseconds
+            Tuple of (summary_time_ms, alloc_bytes, samples_ms):
+                - summary_time_ms: Selected timing statistic in milliseconds
                 - alloc_bytes: Average net traced Python heap change per iteration
                 - samples_ms: Raw time for every measured iteration
         """
+        if warmup_iterations is None:
+            warmup_iterations = self.warmup_iterations
+        if warmup_iterations < 0:
+            raise ValueError(
+                "warmup_iterations must be >= 0, "
+                f"got {warmup_iterations}"
+            )
+
+        def invoke(phase: str, iteration: int) -> None:
+            emit_call_event = (
+                self._call_event_callback is not None
+                and (
+                    self.call_timeout_seconds is not None
+                    or self.memory_benchmark
+                )
+            )
+            if emit_call_event:
+                event = {
+                    "status": "call_start",
+                    "phase": phase,
+                    "iteration": iteration,
+                }
+                if self.call_timeout_seconds is not None:
+                    event["timeout_seconds"] = self.call_timeout_seconds
+                self._call_event_callback(event)
+            try:
+                func()
+            finally:
+                if emit_call_event:
+                    self._call_event_callback({
+                        "status": "call_end",
+                        "phase": phase,
+                        "iteration": iteration,
+                    })
+
+        if self.memory_benchmark:
+            for iteration in range(warmup_iterations):
+                gpu_before = self._gpu_memory_snapshot(reset_peak=True)
+                try:
+                    invoke("warmup", iteration)
+                finally:
+                    self._memory_metrics = self._summarize_gpu_memory(
+                        gpu_before,
+                        self._gpu_memory_snapshot(),
+                    )
+            gc.collect()
+            gpu_before = self._gpu_memory_snapshot(reset_peak=True)
+            t0 = time.perf_counter()
+            try:
+                invoke("measured", 0)
+            finally:
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                gpu_after = self._gpu_memory_snapshot()
+                self._memory_metrics = self._summarize_gpu_memory(
+                    gpu_before,
+                    gpu_after,
+                )
+            return elapsed_ms, 0, [elapsed_ms]
+
         # Warmup phase (untimed)
-        for _ in range(warmup_iterations):
-            func()
+        for iteration in range(warmup_iterations):
+            invoke("warmup", iteration)
 
         # Timed phase with GC disabled and allocation tracking
         gc.disable()
@@ -163,9 +285,9 @@ class BenchmarkAdapter:
             mem0_current, mem0_peak = tracemalloc.get_traced_memory()
 
             samples_ms = []
-            for _ in range(self.repeats):
+            for iteration in range(self.repeats):
                 t0 = time.perf_counter()
-                func()
+                invoke("measured", iteration)
                 samples_ms.append((time.perf_counter() - t0) * 1000.0)
 
             mem1_current, mem1_peak = tracemalloc.get_traced_memory()
@@ -173,14 +295,81 @@ class BenchmarkAdapter:
             tracemalloc.stop()
             gc.enable()
 
-        median_time_ms = statistics.median(samples_ms)
+        if self.timing_statistic == "min":
+            summary_time_ms = min(samples_ms)
+        else:
+            summary_time_ms = statistics.median(samples_ms)
 
         # This tracks only the net Python heap change visible to tracemalloc.
         # It excludes native allocations, framework pools, and device memory.
         total_alloc_bytes = mem1_current - mem0_current
         avg_alloc_bytes = total_alloc_bytes // self.repeats if self.repeats > 0 else 0
 
-        return median_time_ms, avg_alloc_bytes, samples_ms
+        return summary_time_ms, avg_alloc_bytes, samples_ms
+
+    def _gpu_memory_snapshot(self, reset_peak: bool = False) -> Dict[str, Any]:
+        """Read allocator memory statistics for the active GPU framework."""
+        if self.backend != "gpu":
+            return {}
+
+        memory_framework = self.config.get("memory_framework")
+        torch = sys.modules.get("torch")
+        if (
+            memory_framework in (None, "torch")
+            and torch is not None
+            and torch.cuda.is_available()
+        ):
+            device = torch.cuda.current_device()
+            torch.cuda.synchronize(device)
+            if reset_peak:
+                torch.cuda.reset_peak_memory_stats(device)
+            return {
+                "source": "torch_cuda_allocator",
+                "current_allocated_bytes": int(torch.cuda.memory_allocated(device)),
+                "peak_allocated_bytes": int(torch.cuda.max_memory_allocated(device)),
+                "peak_reserved_bytes": int(torch.cuda.max_memory_reserved(device)),
+            }
+
+        if memory_framework not in (None, "jax"):
+            return {}
+        jax = sys.modules.get("jax")
+        if jax is None:
+            return {}
+        try:
+            device = next(
+                device for device in jax.devices()
+                if device.platform == "gpu"
+            )
+            stats = device.memory_stats() or {}
+        except (RuntimeError, StopIteration):
+            return {}
+        return {
+            "source": "jax_device_stats",
+            "current_allocated_bytes": stats.get("bytes_in_use"),
+            "peak_allocated_bytes": stats.get("peak_bytes_in_use"),
+            "peak_reserved_bytes": stats.get("peak_pool_bytes"),
+        }
+
+    @staticmethod
+    def _summarize_gpu_memory(
+        before: Dict[str, Any],
+        after: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Convert framework snapshots into result columns."""
+        if not before and not after:
+            return {}
+        baseline = before.get("current_allocated_bytes")
+        peak = after.get("peak_allocated_bytes")
+        delta = None
+        if baseline is not None and peak is not None:
+            delta = max(0, int(peak) - int(baseline))
+        return {
+            "gpu_memory_source": after.get("source") or before.get("source"),
+            "gpu_baseline_allocated_bytes": baseline,
+            "gpu_peak_allocated_bytes": peak,
+            "gpu_peak_allocated_delta_bytes": delta,
+            "gpu_peak_reserved_bytes": after.get("peak_reserved_bytes"),
+        }
 
     def run_signature(self, path, d: int, m: int) -> Optional[Callable]:
         """
@@ -216,9 +405,9 @@ class BenchmarkAdapter:
         """
         return None  # Default: not supported
 
-    def run_sigdiff(self, path, d: int, m: int) -> Optional[Callable]:
+    def run_sig_backprop(self, path, d: int, m: int) -> Optional[Callable]:
         """
-        Prepare and return kernel for signature differentiation.
+        Prepare and return a signature backpropagation kernel.
 
         This method should be overridden by subclasses to return a callable
         that performs only the kernel computation (no setup).
@@ -229,7 +418,7 @@ class BenchmarkAdapter:
             m: Signature level
 
         Returns:
-            Callable that performs the sigdiff computation, or None if not supported
+            Callable that performs signature backpropagation, or None if unsupported
         """
         return None  # Default: not supported
 
@@ -334,7 +523,7 @@ class BenchmarkAdapter:
         Returns:
             Formatted result dictionary
         """
-        return {
+        result = {
             "N": self.N,
             "d": self.d,
             "m": self.m,
@@ -347,9 +536,12 @@ class BenchmarkAdapter:
             "library": library,
             "method": method,
             "path_type": path_type,
+            "timing_statistic": self.timing_statistic,
             "t_ms": t_ms,
             "t_ms_mean": statistics.fmean(samples_ms),
             "t_ms_std": statistics.pstdev(samples_ms),
             "samples_ms": samples_ms,
             "alloc_bytes": alloc_bytes,
         }
+        result.update(self._memory_metrics)
+        return result

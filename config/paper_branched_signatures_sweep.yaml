@@ -1,0 +1,37 @@
+# Forward and backward branched-signature sweep for the pySigLib paper.
+
+libraries:
+    - pysiglib
+    - stochastax
+
+path_kind: "brownian"
+seed: 20260529
+
+Ns: [1000]
+Ds: [2, 4, 8, 16]
+Ms: [2, 3]
+
+operations:
+    - branchedsignature_nonplanar
+    - branchedsignature_nonplanar_backprop
+    - branchedsignature_planar
+    - branchedsignature_planar_backprop
+
+backends:
+    - cpu
+    - gpu
+
+batch_size: 256
+repeats: 3
+warmup_iterations: 1
+timing_statistic: "min"
+worker_memory_limit_gb: 16
+clear_input_caches_after_task: true
+
+library_configs:
+    pysiglib:
+        backend_configs:
+            cpu:
+                n_jobs: -1
+
+runs_dir: "runs"

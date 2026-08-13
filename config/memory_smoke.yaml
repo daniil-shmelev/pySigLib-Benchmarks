@@ -1,0 +1,19 @@
+# Minimal CPU smoke test for the signature memory benchmark.
+
+libraries:
+    - iisignature
+
+path_kind: "sin"
+seed: 0
+
+Ns: [50]
+Ds: [2]
+Ms: [2]
+operations:
+    - signature
+backends:
+    - cpu
+
+batch_size: 1
+worker_memory_limit_gb: 16
+memory_sample_interval_seconds: 0.005

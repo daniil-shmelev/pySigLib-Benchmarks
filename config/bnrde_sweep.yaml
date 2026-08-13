@@ -1,7 +1,7 @@
 # benchmark_sweep.yaml
 # Focused sweep: 2 dimensions, higher truncation depths
 
-path_kind: "fbm"
+path_kind: "brownian"
 seed: 20260529
 
 # Path lengths

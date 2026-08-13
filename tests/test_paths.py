@@ -12,7 +12,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from common.adapter import BenchmarkAdapter
-from common.paths import make_path_batch, make_path_linear, make_path_sin, make_path
+from common.paths import (
+    make_path,
+    make_path_batch,
+    make_path_brownian,
+    make_path_linear,
+    make_path_sin,
+)
 
 
 class TestPathGeneration:
@@ -90,6 +96,30 @@ class TestPathGeneration:
         path2 = make_path_sin(d, N)
         np.testing.assert_array_equal(path1, path2)
 
+    def test_brownian_path_uses_standard_increment_scale(self, monkeypatch):
+        monkeypatch.setattr(
+            np.random,
+            "standard_normal",
+            lambda shape: np.ones(shape, dtype=np.float64),
+        )
+
+        path = make_path_brownian(d=2, N=5)
+
+        expected = np.arange(5, dtype=np.float32)[:, None] / 2.0
+        np.testing.assert_array_equal(path, np.repeat(expected, 2, axis=1))
+
+    def test_brownian_batch_is_independent_and_reproducible(self):
+        np.random.seed(7)
+        first = make_path_batch(3, 20, "brownian", 4)
+        np.random.seed(7)
+        second = make_path_batch(3, 20, "brownian", 4)
+
+        assert first.shape == (4, 20, 3)
+        assert first.dtype == np.float32
+        np.testing.assert_array_equal(first[:, 0], 0.0)
+        np.testing.assert_array_equal(first, second)
+        assert not np.array_equal(first[0], first[1])
+
     def test_make_path_case_insensitive(self):
         """Test that make_path is case-insensitive"""
         N, d = 15, 2
@@ -136,13 +166,13 @@ class TestPathGeneration:
         assert path_linear.flags['C_CONTIGUOUS']
         assert path_sin.flags['C_CONTIGUOUS']
 
-    def test_seeded_fbm_inputs_are_saved_and_reused(self, tmp_path):
+    def test_seeded_brownian_inputs_are_saved_and_reused(self, tmp_path):
         """Logical inputs are durable, reproducible, and checksummed."""
         config = {
             "N": 16,
             "d": 2,
             "m": 2,
-            "path_kind": "fbm",
+            "path_kind": "brownian",
             "operation": "signature",
             "repeats": 2,
             "batch_size": 2,
@@ -159,6 +189,8 @@ class TestPathGeneration:
 
         np.testing.assert_array_equal(first_x, second_x)
         np.testing.assert_array_equal(first_y, second_y)
+        assert first_x is second_x
+        assert first_y is second_y
         assert not np.array_equal(first_x, first_y)
 
         cache_files = sorted(tmp_path.glob("*.npy"))
@@ -172,6 +204,38 @@ class TestPathGeneration:
             )
             assert checksum == f"{digest}  {cache_path.name}\n"
 
+    def test_prepared_inputs_are_reused_by_namespace(self):
+        adapter = BenchmarkAdapter({
+            "N": 4,
+            "d": 2,
+            "m": 2,
+            "path_kind": "linear",
+            "operation": "signature",
+            "repeats": 1,
+        })
+        path = np.zeros((4, 2), dtype=np.float32)
+        calls = []
+
+        first = adapter.cached_prepared_input(
+            "test",
+            path,
+            lambda: calls.append("first") or object(),
+        )
+        second = adapter.cached_prepared_input(
+            "test",
+            path,
+            lambda: calls.append("second") or object(),
+        )
+        different = adapter.cached_prepared_input(
+            "other",
+            path,
+            lambda: calls.append("different") or object(),
+        )
+
+        assert first is second
+        assert different is not first
+        assert calls == ["first", "different"]
+
     def test_timing_loop_retains_raw_samples(self):
         adapter = BenchmarkAdapter({
             "N": 4,
@@ -180,10 +244,36 @@ class TestPathGeneration:
             "path_kind": "linear",
             "operation": "signature",
             "repeats": 3,
+            "warmup_iterations": 1,
         })
 
-        median_ms, alloc_bytes, samples_ms = adapter.manual_timing_loop(lambda: None)
+        calls = []
+        median_ms, alloc_bytes, samples_ms = adapter.manual_timing_loop(
+            lambda: calls.append(None)
+        )
 
+        assert len(calls) == 4
         assert len(samples_ms) == 3
         assert median_ms == np.median(samples_ms)
         assert alloc_bytes >= 0
+
+    def test_timing_loop_can_select_minimum_sample(self):
+        adapter = BenchmarkAdapter({
+            "N": 4,
+            "d": 2,
+            "m": 2,
+            "path_kind": "linear",
+            "operation": "signature",
+            "repeats": 3,
+            "warmup_iterations": 1,
+            "timing_statistic": "min",
+        })
+
+        calls = []
+        minimum_ms, _, samples_ms = adapter.manual_timing_loop(
+            lambda: calls.append(None)
+        )
+
+        assert len(calls) == 4
+        assert len(samples_ms) == 3
+        assert minimum_ms == min(samples_ms)

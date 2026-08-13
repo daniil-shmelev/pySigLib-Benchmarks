@@ -31,4 +31,9 @@ def test_pathsig_is_registered_as_gpu_only():
 
     config = registry["libraries"]["pathsig"]
     assert config["backend"] == "gpu"
-    assert config["operations"] == ["signature", "logsignature", "sigdiff"]
+    assert config["operations"] == [
+        "signature",
+        "logsignature",
+        "sig_backprop",
+        "logsignature_backprop",
+    ]

@@ -19,20 +19,49 @@ class PySigLibAdapter(BenchmarkAdapter):
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        # Import here to avoid import errors if not available.
-        import jax
-        import jax.numpy as jnp
-        import pysiglib.jax_api as pysiglib
+        import pysiglib
+        import torch
+        from pysiglib.log_sig_backprop import _log_sig_from_path_backprop
 
-        self.jax = jax
-        self.jnp = jnp
         self.pysiglib = pysiglib
+        self.torch = torch
+        self.log_sig_from_path_backprop = _log_sig_from_path_backprop
         self.log_sig_method = int(config.get("log_sig_method", 2))
+        self.n_jobs = int(config.get("n_jobs", 1))
 
     def _path_array(self, path: np.ndarray):
-        """Convert path data to a contiguous JAX array during setup."""
-        path_np = np.ascontiguousarray(path, dtype=np.float32)
-        return self.jnp.asarray(path_np, dtype=self.jnp.float32)
+        """Prepare the standard API input array outside the timed region."""
+        if self.backend == "gpu":
+            return self.cached_prepared_input(
+                "pysiglib.standard.gpu",
+                path,
+                lambda: self.torch.as_tensor(
+                    np.ascontiguousarray(path, dtype=np.float32),
+                    dtype=self.torch.float32,
+                    device="cuda",
+                ),
+            )
+
+        return self.cached_prepared_input(
+            "pysiglib.standard.cpu",
+            path,
+            lambda: np.ascontiguousarray(path, dtype=np.float32),
+        )
+
+    def _cotangent(self, output):
+        values = self.random_cotangent(output.shape)
+        if isinstance(output, np.ndarray):
+            return np.asarray(values, dtype=output.dtype)
+        return self.torch.as_tensor(
+            values,
+            dtype=output.dtype,
+            device=output.device,
+        )
+
+    def _synchronize(self, result):
+        if self.backend == "gpu":
+            self.torch.cuda.synchronize()
+        return result
 
     def run_signature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
@@ -40,16 +69,17 @@ class PySigLibAdapter(BenchmarkAdapter):
 
         Returns a closure that performs only the kernel (no setup).
         """
-        # Setup phase (untimed): ensure path is contiguous and on the JAX backend
         path = self._path_array(path)
 
-        def signature_fn(path_arg):
-            return self.pysiglib.signature(path_arg, degree=m)
+        def signature_fn():
+            result = self.pysiglib.signature(
+                path,
+                degree=m,
+                n_jobs=self.n_jobs,
+            )
+            return self._synchronize(result)
 
-        signature_fn = self.jax.jit(signature_fn)
-
-        # Return kernel closure
-        return lambda: signature_fn(path).block_until_ready()
+        return signature_fn
 
     def run_logsignature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
@@ -57,8 +87,6 @@ class PySigLibAdapter(BenchmarkAdapter):
 
         Returns a closure that performs only the kernel (no setup).
         """
-        # Setup phase (untimed): ensure path is contiguous and prepare cached
-        # log signature data when the selected method requires it.
         path = self._path_array(path)
         if self.log_sig_method in (1, 2):
             device = (
@@ -75,36 +103,118 @@ class PySigLibAdapter(BenchmarkAdapter):
         log_sig_method = self.log_sig_method
         use_scalar_term = log_sig_method in (1, 2)
 
-        def logsignature_fn(path_arg):
-            return self.pysiglib.log_sig(
-                path_arg,
+        def logsignature_fn():
+            result = self.pysiglib.log_sig(
+                path,
                 m,
                 method=log_sig_method,
                 scalar_term=use_scalar_term,
+                n_jobs=self.n_jobs,
             )
+            return self._synchronize(result)
 
-        logsignature_fn = self.jax.jit(logsignature_fn)
+        return logsignature_fn
 
-        # Return kernel closure
-        return lambda: logsignature_fn(path).block_until_ready()
-
-    def run_sigdiff(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
+    def run_sig_backprop(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
-        Prepare signature differentiation kernel.
+        Prepare signature backpropagation kernel.
 
         Returns a closure that performs only the kernel (no setup).
         """
-        # Setup phase (untimed): ensure path is contiguous and on the JAX backend
         path = self._path_array(path)
+        output = self.pysiglib.signature(
+            path,
+            degree=m,
+            n_jobs=self.n_jobs,
+        )
+        self._synchronize(output)
+        cotangent = self._cotangent(output)
 
-        def loss_fn(path_arg):
-            sig = self.pysiglib.signature(path_arg, degree=m)
-            return self.jnp.sum(sig)
+        def backprop_fn():
+            result = self.pysiglib.sig_backprop(
+                path,
+                output,
+                cotangent,
+                m,
+                n_jobs=self.n_jobs,
+            )
+            return self._synchronize(result)
 
-        grad_fn = self.jax.jit(self.jax.grad(loss_fn))
+        return backprop_fn
 
-        # Return kernel closure that computes signature + backprop
-        return lambda: grad_fn(path).block_until_ready()
+    def run_logsignature_backprop(
+        self, path: np.ndarray, d: int, m: int
+    ) -> Optional[Callable]:
+        path = self._path_array(path)
+        if self.log_sig_method in (1, 2):
+            device = (
+                "cuda" if self.backend == "gpu"
+                else "cpu" if self.backend == "cpu"
+                else "both"
+            )
+            self.pysiglib.prepare_log_sig(
+                d,
+                m,
+                method=self.log_sig_method,
+                device=device,
+            )
+        log_sig_method = self.log_sig_method
+        if log_sig_method == 3:
+            output = self.pysiglib.log_sig(
+                path,
+                m,
+                method=3,
+                n_jobs=self.n_jobs,
+            )
+            self._synchronize(output)
+            cotangent = self._cotangent(output)
+
+            def backprop_fn():
+                result = self.log_sig_from_path_backprop(
+                    cotangent,
+                    path,
+                    m,
+                    n_jobs=self.n_jobs,
+                )
+                return self._synchronize(result)
+
+            return backprop_fn
+        use_scalar_term = log_sig_method in (1, 2)
+        signature = self.pysiglib.signature(
+            path,
+            degree=m,
+            scalar_term=use_scalar_term,
+            n_jobs=self.n_jobs,
+        )
+        output = self.pysiglib.sig_to_log_sig(
+            signature,
+            d,
+            m,
+            method=log_sig_method,
+            n_jobs=self.n_jobs,
+        )
+        self._synchronize(output)
+        cotangent = self._cotangent(output)
+
+        def backprop_fn():
+            sig_cotangent = self.pysiglib.sig_to_log_sig_backprop(
+                signature,
+                cotangent,
+                d,
+                m,
+                method=log_sig_method,
+                n_jobs=self.n_jobs,
+            )
+            result = self.pysiglib.sig_backprop(
+                path,
+                signature,
+                sig_cotangent,
+                m,
+                n_jobs=self.n_jobs,
+            )
+            return self._synchronize(result)
+
+        return backprop_fn
 
     def run_branchedsignature(
         self,
@@ -119,17 +229,76 @@ class PySigLibAdapter(BenchmarkAdapter):
 
         Returns a closure that performs only the kernel (no setup).
         """
-        # Setup phase (untimed): ensure path is contiguous and prepare cached
-        # tree/coproduct data for the selected planar convention.
+        if (
+            self.backend == "gpu"
+            and self.pysiglib.branched_sig_length(
+                d,
+                m,
+                planar=planar,
+                scalar_term=False,
+            ) > 1024
+        ):
+            raise RuntimeError(
+                "CUDA branched sig: num_trees > 1024 not supported"
+            )
+
         path = self._path_array(path)
         self.pysiglib.prepare_branched_sig(d, m, planar=planar)
 
-        def branchedsignature_fn(path_arg):
-            return self.pysiglib.branched_sig(path_arg, degree=m, planar=planar)
+        def branchedsignature_fn():
+            result = self.pysiglib.branched_sig(
+                path,
+                degree=m,
+                planar=planar,
+                n_jobs=self.n_jobs,
+            )
+            return self._synchronize(result)
 
-        branchedsignature_fn = self.jax.jit(branchedsignature_fn)
+        return branchedsignature_fn
 
-        return lambda: branchedsignature_fn(path).block_until_ready()
+    def run_branchedsignature_backprop(
+        self,
+        path: np.ndarray,
+        d: int,
+        m: int,
+        *,
+        planar: bool,
+    ) -> Optional[Callable]:
+        if (
+            self.backend == "gpu"
+            and self.pysiglib.branched_sig_length(
+                d,
+                m,
+                planar=planar,
+                scalar_term=False,
+            ) > 1024
+        ):
+            raise RuntimeError(
+                "CUDA branched sig: num_trees > 1024 not supported"
+            )
+        path = self._path_array(path)
+        self.pysiglib.prepare_branched_sig(d, m, planar=planar)
+        output = self.pysiglib.branched_sig(
+            path,
+            degree=m,
+            planar=planar,
+            n_jobs=self.n_jobs,
+        )
+        self._synchronize(output)
+        cotangent = self._cotangent(output)
+
+        def backprop_fn():
+            result = self.pysiglib.branched_sig_backprop(
+                path,
+                output,
+                cotangent,
+                m,
+                planar=planar,
+                n_jobs=self.n_jobs,
+            )
+            return self._synchronize(result)
+
+        return backprop_fn
 
     def run_signaturekernel(
         self,
@@ -148,19 +317,60 @@ class PySigLibAdapter(BenchmarkAdapter):
         dyadic_order = int(self.config.get("sig_kernel_dyadic_order", m))
         max_batch = int(self.config.get("sig_kernel_max_batch", -1))
 
-        def signaturekernel_fn(path1_arg, path2_arg):
-            return self.pysiglib.sig_kernel_gram(
-                path1_arg,
-                path2_arg,
+        def signaturekernel_fn():
+            result = self.pysiglib.sig_kernel_gram(
+                path1,
+                path2,
                 dyadic_order=dyadic_order,
                 static_kernel=None,
                 time_aug=False,
+                n_jobs=self.n_jobs,
                 max_batch=max_batch,
             )
+            return self._synchronize(result)
 
-        signaturekernel_fn = self.jax.jit(signaturekernel_fn)
+        return signaturekernel_fn
 
-        return lambda: signaturekernel_fn(path1, path2).block_until_ready()
+    def run_signaturekernel_backprop(
+        self,
+        path1: np.ndarray,
+        path2: np.ndarray,
+        d: int,
+        m: int,
+    ) -> Optional[Callable]:
+        path1 = self._path_array(path1)
+        path2 = self._path_array(path2)
+        dyadic_order = int(self.config.get("sig_kernel_dyadic_order", m))
+        max_batch = int(self.config.get("sig_kernel_max_batch", -1))
+
+        output = self.pysiglib.sig_kernel_gram(
+            path1,
+            path2,
+            dyadic_order=dyadic_order,
+            static_kernel=None,
+            time_aug=False,
+            n_jobs=self.n_jobs,
+            max_batch=max_batch,
+        )
+        self._synchronize(output)
+        cotangent = self._cotangent(output)
+
+        def backprop_fn():
+            result, _ = self.pysiglib.sig_kernel_gram_backprop(
+                cotangent,
+                path1,
+                path2,
+                dyadic_order=dyadic_order,
+                static_kernel=None,
+                time_aug=False,
+                left_deriv=True,
+                right_deriv=False,
+                n_jobs=self.n_jobs,
+                max_batch=max_batch,
+            )
+            return self._synchronize(result)
+
+        return backprop_fn
 
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
@@ -175,20 +385,51 @@ class PySigLibAdapter(BenchmarkAdapter):
         elif self.operation == "logsignature":
             kernel = self.run_logsignature(path, self.d, self.m)
             method = f"log_sig(method={self.log_sig_method})"
-        elif self.operation == "sigdiff":
-            kernel = self.run_sigdiff(path, self.d, self.m)
-            method = "jax.grad(signature)"
+        elif self.operation == "sig_backprop":
+            kernel = self.run_sig_backprop(path, self.d, self.m)
+            method = "sig_backprop"
+        elif self.operation == "logsignature_backprop":
+            kernel = self.run_logsignature_backprop(path, self.d, self.m)
+            method = f"log_sig_backprop(method={self.log_sig_method})"
         elif self.operation in ("branchedsignature", "branchedsignature_nonplanar"):
             kernel = self.run_branchedsignature(path, self.d, self.m, planar=False)
             method = "branched_sig(planar=False)"
         elif self.operation == "branchedsignature_planar":
             kernel = self.run_branchedsignature(path, self.d, self.m, planar=True)
             method = "branched_sig(planar=True)"
+        elif self.operation == "branchedsignature_nonplanar_backprop":
+            kernel = self.run_branchedsignature_backprop(
+                path,
+                self.d,
+                self.m,
+                planar=False,
+            )
+            method = "branched_sig_backprop(planar=False)"
+        elif self.operation == "branchedsignature_planar_backprop":
+            kernel = self.run_branchedsignature_backprop(
+                path,
+                self.d,
+                self.m,
+                planar=True,
+            )
+            method = "branched_sig_backprop(planar=True)"
         elif self.operation in ("signaturekernel", "signature_kernel", "sigkernel"):
             path2 = self.make_path_input()
             kernel = self.run_signaturekernel(path, path2, self.d, self.m)
             method = (
                 "sig_kernel_gram"
+                f"(dyadic_order={int(self.config.get('sig_kernel_dyadic_order', self.m))})"
+            )
+        elif self.operation == "signaturekernel_backprop":
+            path2 = self.make_path_input()
+            kernel = self.run_signaturekernel_backprop(
+                path,
+                path2,
+                self.d,
+                self.m,
+            )
+            method = (
+                "sig_kernel_gram_backprop"
                 f"(dyadic_order={int(self.config.get('sig_kernel_dyadic_order', self.m))})"
             )
         else:
@@ -208,8 +449,10 @@ class PySigLibAdapter(BenchmarkAdapter):
             samples_ms=samples_ms,
             library="pysiglib",
             method=method,
-            path_type="jax.Array",
-            language="python"
+            path_type=(
+                "torch.Tensor" if self.backend == "gpu" else "numpy.ndarray"
+            ),
+            language="python",
         )
 
 

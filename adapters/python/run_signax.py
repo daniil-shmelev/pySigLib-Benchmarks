@@ -32,8 +32,14 @@ class SignaxAdapter(BenchmarkAdapter):
 
     def _path_array(self, path: np.ndarray):
         """Convert path data to a contiguous JAX array during setup."""
-        path_np = np.ascontiguousarray(path, dtype=np.float32)
-        return self.jnp.asarray(path_np, dtype=self.jnp.float32)
+        return self.cached_prepared_input(
+            "signax.jax",
+            path,
+            lambda: self.jnp.asarray(
+                np.ascontiguousarray(path, dtype=np.float32),
+                dtype=self.jnp.float32,
+            ),
+        )
 
     def run_signature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
@@ -79,28 +85,54 @@ class SignaxAdapter(BenchmarkAdapter):
 
         return lambda: logsignature_fn(path_jax).block_until_ready()
 
-    def run_sigdiff(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
+    def run_sig_backprop(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
-        Prepare signature differentiation kernel.
+        Prepare signature backpropagation kernel.
 
         Returns a closure that performs only the kernel (no setup).
         """
         path_jax = self._path_array(path)
         num_chunks = self.num_chunks
 
-        def loss_fn(path_arg):
-            sig = self.signax.signature(
+        def signature_fn(path_arg):
+            return self.signax.signature(
                 path_arg,
                 depth=m,
                 stream=False,
                 flatten=True,
                 num_chunks=num_chunks,
             )
-            return self.jnp.sum(sig)
 
-        grad_fn = self.jax.jit(self.jax.grad(loss_fn))
+        output, pullback = self.jax.vjp(signature_fn, path_jax)
+        cotangent = self.jnp.asarray(
+            self.random_cotangent(output.shape),
+            dtype=output.dtype,
+        )
+        backprop_fn = self.jax.jit(lambda cotangent_arg: pullback(cotangent_arg)[0])
+        return lambda: backprop_fn(cotangent).block_until_ready()
 
-        return lambda: grad_fn(path_jax).block_until_ready()
+    def run_logsignature_backprop(
+        self, path: np.ndarray, d: int, m: int
+    ) -> Optional[Callable]:
+        path_jax = self._path_array(path)
+        num_chunks = self.num_chunks
+
+        def logsignature_fn(path_arg):
+            return self.signax.logsignature(
+                path_arg,
+                depth=m,
+                stream=False,
+                flatten=True,
+                num_chunks=num_chunks,
+            )
+
+        output, pullback = self.jax.vjp(logsignature_fn, path_jax)
+        cotangent = self.jnp.asarray(
+            self.random_cotangent(output.shape),
+            dtype=output.dtype,
+        )
+        backprop_fn = self.jax.jit(lambda cotangent_arg: pullback(cotangent_arg)[0])
+        return lambda: backprop_fn(cotangent).block_until_ready()
 
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
@@ -115,9 +147,12 @@ class SignaxAdapter(BenchmarkAdapter):
         elif self.operation == "logsignature":
             kernel = self.run_logsignature(path, self.d, self.m)
             method = f"logsignature(num_chunks={self.num_chunks})"
-        elif self.operation == "sigdiff":
-            kernel = self.run_sigdiff(path, self.d, self.m)
-            method = f"jax.grad(signature, num_chunks={self.num_chunks})"
+        elif self.operation == "sig_backprop":
+            kernel = self.run_sig_backprop(path, self.d, self.m)
+            method = f"vjp(signature, num_chunks={self.num_chunks})"
+        elif self.operation == "logsignature_backprop":
+            kernel = self.run_logsignature_backprop(path, self.d, self.m)
+            method = f"vjp(logsignature, num_chunks={self.num_chunks})"
         else:
             # Operation not supported
             return None

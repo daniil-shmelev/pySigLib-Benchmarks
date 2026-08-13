@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import matplotlib
+from matplotlib.colors import LogNorm
 
 matplotlib.use("Agg")
 
@@ -11,16 +12,24 @@ matplotlib.use("Agg")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+import plotting
 from plotting import (
-    _heatmap_color_scale,
+    _annotate_heatmap,
     _format_heatmap_library_axis,
     _format_heatmap_param_axis,
+    _format_number,
+    _heatmap_color_scale,
     _rows_for_operation,
     _series_key,
     load_results,
     make_heatmap_plot,
-    make_line_plot,
 )
+
+
+def test_format_number_avoids_scientific_notation():
+    assert _format_number(0.0264) == "0.0264"
+    assert _format_number(170.0) == "170"
+    assert _format_number(4300.0) == "4300"
 
 
 def test_heatmap_param_axis_omits_fixed_N():
@@ -30,8 +39,8 @@ def test_heatmap_param_axis_omits_fixed_N():
     ])
 
     assert labels == ["2", "3"]
-    assert ylabel == "d"
-    assert fixed_title == "N=512"
+    assert ylabel == "$d$"
+    assert fixed_title == "$N=512$"
     assert show_axis
 
 
@@ -42,8 +51,8 @@ def test_heatmap_param_axis_omits_fixed_d():
     ])
 
     assert labels == ["256", "512"]
-    assert ylabel == "N"
-    assert fixed_title == "d=4"
+    assert ylabel == "$N$"
+    assert fixed_title == "$d=4$"
     assert show_axis
 
 
@@ -52,14 +61,14 @@ def test_heatmap_param_axis_hides_single_fixed_point():
 
     assert labels == [""]
     assert ylabel == ""
-    assert fixed_title == "N=512, d=4"
+    assert fixed_title == "$N=512, d=4$"
     assert not show_axis
 
 
 def test_heatmap_library_axis_hides_single_library_tick():
     title, show_axis = _format_heatmap_library_axis(["pysiglib"])
 
-    assert title == "library=pysiglib"
+    assert title == "pysiglib"
     assert not show_axis
 
 
@@ -70,20 +79,39 @@ def test_heatmap_library_axis_shows_multiple_library_ticks():
     assert show_axis
 
 
-def test_heatmap_color_scale_uses_readable_lower_bound():
-    vmin, vmax, ticks = _heatmap_color_scale([0.26, 1.6])
+def test_heatmap_color_scale_is_logarithmic():
+    norm = _heatmap_color_scale([0.26, 1.6])
 
-    assert vmin == 0.2
-    assert vmax == 1.6
-    assert 0.2 in ticks
+    assert isinstance(norm, LogNorm)
+    assert norm.vmin == 0.26
+    assert norm.vmax == 1.6
 
 
-def test_heatmap_color_scale_avoids_zero_when_data_starts_near_point_two():
-    vmin, vmax, ticks = _heatmap_color_scale([0.26, 3.9])
+def test_heatmap_color_scale_ignores_nonpositive_values():
+    norm = _heatmap_color_scale([-1.0, 0.0, 0.26, 3.9])
 
-    assert vmin == 0.2
-    assert vmax == 4.0
-    assert ticks[0] == 0.2
+    assert norm.vmin == 0.26
+    assert norm.vmax == 3.9
+
+
+def test_annotate_heatmap_labels_oom_failures():
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    fig, ax = plt.subplots()
+    matrix = np.array([[np.nan, 1.0]])
+    failure_labels = np.array([["OOM", ""]], dtype=object)
+
+    _annotate_heatmap(
+        ax,
+        matrix,
+        _heatmap_color_scale([1.0]),
+        failure_labels,
+    )
+
+    assert [text.get_text() for text in ax.texts] == ["OOM", "1"]
+    assert ax.texts[0].get_color() == "#991B1B"
+    plt.close(fig)
 
 
 def test_make_heatmap_plot_saves_one_operation_level_figure(tmp_path):
@@ -112,13 +140,45 @@ def test_make_heatmap_plot_saves_one_operation_level_figure(tmp_path):
     assert not (tmp_path / "plot_heatmaps").exists()
 
 
+def test_make_heatmap_plot_loads_oom_failures(tmp_path, monkeypatch):
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(
+        "\n".join([
+            "N,d,m,batch_size,path_kind,operation,backend,language,library,method,path_type,t_ms,alloc_bytes",
+            "10000,2,3,256,brownian,signature,cpu,python,pysiglib,signature,array,100,0",
+            "10000,2,3,256,brownian,signature,cpu,python,other,signature,array,120,0",
+            "10000,16,3,256,brownian,signature,cpu,python,other,signature,array,140,0",
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / "failed_tasks.csv").write_text(
+        "\n".join([
+            "task_id,library,backend,operation,N,d,m,batch_size,error_type,reason",
+            "id,pysiglib,cpu,signature,10000,16,3,256,BenchmarkWorkerOOM,worker received SIGKILL",
+        ]),
+        encoding="utf-8",
+    )
+    captured_labels = []
+    original_annotate = plotting._annotate_heatmap
+
+    def capture_labels(ax, matrix, norm, failure_labels=None, fontsize=10):
+        captured_labels.append(failure_labels.copy())
+        original_annotate(ax, matrix, norm, failure_labels, fontsize)
+
+    monkeypatch.setattr(plotting, "_annotate_heatmap", capture_labels)
+
+    make_heatmap_plot(csv_path, tmp_path / "heatmap.png")
+
+    assert any((labels == "OOM").any() for labels in captured_labels)
+
+
 def test_plot_series_keep_cpu_and_gpu_variants_distinct(tmp_path):
     csv_path = tmp_path / "results.csv"
     csv_path.write_text(
         "\n".join([
             "N,d,m,batch_size,path_kind,operation,backend,language,library,method,path_type,t_ms,alloc_bytes",
-            "32,2,2,256,fbm,signature,cpu,python,pysiglib,signature,jax.Array,1.0,0",
-            "32,2,2,256,fbm,signature,gpu,python,pysiglib,signature,jax.Array,0.5,0",
+            "32,2,2,256,fbm,signature,cpu,python,pysiglib,signature,numpy.ndarray,1.0,0",
+            "32,2,2,256,fbm,signature,gpu,python,pysiglib,signature,torch.Tensor,0.5,0",
         ]),
         encoding="utf-8",
     )
@@ -144,19 +204,3 @@ def test_rows_for_operation_keeps_functions_separate():
         {"operation": "logsignature", "backend": "gpu"},
     ]
     assert _rows_for_operation(rows, None) == rows
-
-
-def test_line_plot_includes_branched_operations(tmp_path):
-    csv_path = tmp_path / "results.csv"
-    csv_path.write_text(
-        "\n".join([
-            "N,d,m,batch_size,seed,path_kind,operation,backend,language,library,method,path_type,t_ms,t_ms_mean,t_ms_std,samples_ms,alloc_bytes",
-            '32,2,2,256,1,fbm,branchedsignature_planar,gpu,python,pysiglib,branched,jax.Array,0.5,0.5,0.0,"[0.5]",0',
-            '32,4,2,256,1,fbm,branchedsignature_planar,gpu,python,pysiglib,branched,jax.Array,0.8,0.8,0.0,"[0.8]",0',
-        ]),
-        encoding="utf-8",
-    )
-    output_path = tmp_path / "line.png"
-
-    assert make_line_plot(csv_path, output_path) == output_path
-    assert output_path.exists()

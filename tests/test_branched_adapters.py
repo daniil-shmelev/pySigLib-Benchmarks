@@ -84,10 +84,9 @@ def test_stochastax_branchedsignature_matches_direct_api(planar, operation):
         (True, "branchedsignature_planar"),
     ],
 )
-def test_pysiglib_branchedsignature_matches_jax_api(planar, operation):
-    """pySigLib adapter uses the JAX branched signature API."""
-    pytest.importorskip("jax")
-    pytest.importorskip("pysiglib.jax_api")
+def test_pysiglib_branchedsignature_matches_standard_api(planar, operation):
+    """pySigLib adapter uses the standard branched signature API."""
+    pytest.importorskip("pysiglib")
 
     adapter = PySigLibAdapter(_config(operation))
     path = make_path(2, 4, "linear")
@@ -95,13 +94,75 @@ def test_pysiglib_branchedsignature_matches_jax_api(planar, operation):
     kernel = adapter.run_branchedsignature(path, 2, 2, planar=planar)
     got = np.asarray(kernel())
 
-    path_jax = adapter._path_array(path)
+    path_array = adapter._path_array(path)
     adapter.pysiglib.prepare_branched_sig(2, 2, planar=planar)
     expected = np.asarray(
-        adapter.pysiglib.branched_sig(path_jax, degree=2, planar=planar)
+        adapter.pysiglib.branched_sig(path_array, degree=2, planar=planar)
     )
     expected_len = adapter.pysiglib.branched_sig_length(2, 2, planar=planar)
 
     assert got.dtype == np.float32
     assert got.shape == (expected_len,)
     np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.parametrize("planar", [False, True])
+def test_pysiglib_branchedsignature_backprop_matches_standard_api(planar):
+    pytest.importorskip("pysiglib")
+
+    adapter = PySigLibAdapter(
+        _config("branchedsignature_planar_backprop")
+    )
+    path = make_path(2, 4, "linear")
+    got = np.asarray(
+        adapter.run_branchedsignature_backprop(
+            path,
+            2,
+            2,
+            planar=planar,
+        )()
+    )
+
+    path_array = adapter._path_array(path)
+    adapter.pysiglib.prepare_branched_sig(2, 2, planar=planar)
+    output = adapter.pysiglib.branched_sig(
+        path_array,
+        degree=2,
+        planar=planar,
+    )
+    cotangent = np.asarray(
+        adapter.random_cotangent(output.shape), dtype=output.dtype
+    )
+    expected = np.asarray(
+        adapter.pysiglib.branched_sig_backprop(
+            path_array,
+            output,
+            cotangent,
+            2,
+            planar=planar,
+        )
+    )
+
+    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("planar", [False, True])
+def test_stochastax_branchedsignature_backprop_returns_path_gradient(planar):
+    pytest.importorskip("jax")
+    pytest.importorskip("stochastax")
+
+    adapter = StochastaxAdapter(
+        _config("branchedsignature_planar_backprop")
+    )
+    path = make_path(2, 4, "linear")
+    gradient = np.asarray(
+        adapter.run_branchedsignature_backprop(
+            path,
+            2,
+            2,
+            planar=planar,
+        )()
+    )
+
+    assert gradient.shape == path.shape
+    assert np.isfinite(gradient).all()

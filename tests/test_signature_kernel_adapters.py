@@ -61,10 +61,9 @@ def test_polysigkernel_signaturekernel_matches_direct_api():
     np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
 
 
-def test_pysiglib_signaturekernel_matches_jax_api():
-    """pySigLib adapter uses the JAX signature-kernel Gram API."""
-    pytest.importorskip("jax")
-    pytest.importorskip("pysiglib.jax_api")
+def test_pysiglib_signaturekernel_matches_standard_api():
+    """pySigLib adapter uses the standard signature-kernel Gram API."""
+    pytest.importorskip("pysiglib")
 
     adapter = PySigLibAdapter(_config("signaturekernel"))
     path1 = _path_batch()
@@ -80,3 +79,67 @@ def test_pysiglib_signaturekernel_matches_jax_api():
     assert got.dtype == np.float32
     assert got.shape == (2, 2)
     np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_polysigkernel_backprop_matches_direct_vjp():
+    pytest.importorskip("jax")
+    pytest.importorskip("polysigkernel")
+
+    adapter = PolySigKernelAdapter(_config("signaturekernel_backprop"))
+    path1 = _path_batch()
+    path2 = _path_batch() + 0.2
+    got = np.asarray(
+        adapter.run_signaturekernel_backprop(path1, path2, 2, 2)()
+    )
+
+    X = adapter._path_batch(path1)
+    Y = adapter._path_batch(path2)
+    sig_kernel = adapter.SigKernel_polynomial(
+        order=2,
+        static_kernel="linear",
+        solver=adapter.solver,
+        add_time=False,
+    )
+    output, pullback = adapter.jax.vjp(
+        lambda X_arg: sig_kernel.kernel_matrix(X_arg, Y),
+        X,
+    )
+    cotangent = adapter.jnp.asarray(
+        adapter.random_cotangent(output.shape),
+        dtype=output.dtype,
+    )
+    expected = np.asarray(pullback(cotangent)[0])
+
+    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+
+def test_pysiglib_signaturekernel_backprop_matches_standard_api():
+    pytest.importorskip("pysiglib")
+
+    adapter = PySigLibAdapter(_config("signaturekernel_backprop"))
+    path1 = _path_batch()
+    path2 = _path_batch() + 0.2
+    got = np.asarray(
+        adapter.run_signaturekernel_backprop(path1, path2, 2, 2)()
+    )
+
+    X = adapter._path_array(path1)
+    Y = adapter._path_array(path2)
+    output = adapter.pysiglib.sig_kernel_gram(
+        X,
+        Y,
+        dyadic_order=2,
+    )
+    cotangent = np.asarray(
+        adapter.random_cotangent(output.shape), dtype=output.dtype
+    )
+    expected, _ = adapter.pysiglib.sig_kernel_gram_backprop(
+        cotangent,
+        X,
+        Y,
+        dyadic_order=2,
+        left_deriv=True,
+        right_deriv=False,
+    )
+
+    np.testing.assert_allclose(got, np.asarray(expected), rtol=1e-5, atol=1e-5)

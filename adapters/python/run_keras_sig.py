@@ -36,6 +36,7 @@ class KerasSigAdapter(BenchmarkAdapter):
 
     def _path_array(self, path: np.ndarray):
         """Convert path data to a batched contiguous JAX array during setup."""
+        source_path = path
         if path.ndim == 2:
             path = path[None, :, :]
         elif path.ndim != 3:
@@ -43,7 +44,11 @@ class KerasSigAdapter(BenchmarkAdapter):
                 f"path must have shape (N, d) or (batch_size, N, d), got {path.shape}"
             )
         path_np = np.ascontiguousarray(path, dtype=np.float32)
-        return self.jnp.asarray(path_np, dtype=self.jnp.float32)
+        return self.cached_prepared_input(
+            "keras-sig.jax",
+            source_path,
+            lambda: self.jnp.asarray(path_np, dtype=self.jnp.float32),
+        )
 
     def run_signature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
@@ -64,21 +69,24 @@ class KerasSigAdapter(BenchmarkAdapter):
 
         return lambda: signature_fn(path_jax).block_until_ready()
 
-    def run_sigdiff(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
+    def run_sig_backprop(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """
-        Prepare signature differentiation kernel.
+        Prepare signature backpropagation kernel.
 
         Returns a closure that performs only the kernel (no setup).
         """
         path_jax = self._path_array(path)
 
-        def loss_fn(path_arg):
-            sig = self.jax_gpu_signature(path_arg, depth=m, stream=False)
-            return self.jnp.sum(sig)
+        def signature_fn(path_arg):
+            return self.jax_gpu_signature(path_arg, depth=m, stream=False)
 
-        grad_fn = self.jax.jit(self.jax.grad(loss_fn))
-
-        return lambda: grad_fn(path_jax).block_until_ready()
+        output, pullback = self.jax.vjp(signature_fn, path_jax)
+        cotangent = self.jnp.asarray(
+            self.random_cotangent(output.shape),
+            dtype=output.dtype,
+        )
+        backprop_fn = self.jax.jit(lambda cotangent_arg: pullback(cotangent_arg)[0])
+        return lambda: backprop_fn(cotangent).block_until_ready()
 
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
@@ -89,9 +97,9 @@ class KerasSigAdapter(BenchmarkAdapter):
         if self.operation == "signature":
             kernel = self.run_signature(path, self.d, self.m)
             method = "jax_gpu_signature"
-        elif self.operation == "sigdiff":
-            kernel = self.run_sigdiff(path, self.d, self.m)
-            method = "jax.grad(jax_gpu_signature)"
+        elif self.operation == "sig_backprop":
+            kernel = self.run_sig_backprop(path, self.d, self.m)
+            method = "vjp(jax_gpu_signature)"
         else:
             # Operation not supported
             return None

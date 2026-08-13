@@ -151,3 +151,47 @@ def test_tensordev_logsignature_matches_direct_api():
         assert got_level.dtype == np.float32
         assert got_level.shape == expected_level.shape
         np.testing.assert_allclose(got_level, expected_level, rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("adapter_class", "package", "method_name", "operation"),
+    [
+        (SignaxAdapter, "signax", "run_sig_backprop", "sig_backprop"),
+        (
+            SignaxAdapter,
+            "signax",
+            "run_logsignature_backprop",
+            "logsignature_backprop",
+        ),
+        (KerasSigAdapter, "keras_sig", "run_sig_backprop", "sig_backprop"),
+        (TensorDevAdapter, "tensordev", "run_sig_backprop", "sig_backprop"),
+        (
+            TensorDevAdapter,
+            "tensordev",
+            "run_logsignature_backprop",
+            "logsignature_backprop",
+        ),
+    ],
+)
+def test_jax_backprop_returns_path_gradient(
+    adapter_class,
+    package,
+    method_name,
+    operation,
+):
+    if package == "keras_sig":
+        os.environ["KERAS_BACKEND"] = "jax"
+    pytest.importorskip("jax")
+    pytest.importorskip(package)
+    adapter = adapter_class(_config(operation))
+    path = make_path(2, 4, "linear")
+
+    gradient = np.asarray(getattr(adapter, method_name)(path, 2, 2)())
+
+    expected_shape = (
+        tuple(adapter._path_array(path).shape)
+        if package == "keras_sig"
+        else path.shape
+    )
+    assert gradient.shape == expected_shape
+    assert np.isfinite(gradient).all()

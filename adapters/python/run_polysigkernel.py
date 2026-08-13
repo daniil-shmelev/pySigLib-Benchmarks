@@ -34,7 +34,11 @@ class PolySigKernelAdapter(BenchmarkAdapter):
         path_np = np.ascontiguousarray(path, dtype=np.float32)
         if path_np.ndim == 2:
             path_np = path_np[None, :, :]
-        return self.jnp.asarray(path_np, dtype=self.jnp.float32)
+        return self.cached_prepared_input(
+            "polysigkernel.jax",
+            path,
+            lambda: self.jnp.asarray(path_np, dtype=self.jnp.float32),
+        )
 
     def run_signaturekernel(
         self,
@@ -68,14 +72,63 @@ class PolySigKernelAdapter(BenchmarkAdapter):
 
         return lambda: sig_kernel.kernel_matrix(X, Y, max_batch=max_batch).block_until_ready()
 
+    def run_signaturekernel_backprop(
+        self,
+        path1: np.ndarray,
+        path2: np.ndarray,
+        d: int,
+        m: int,
+    ) -> Optional[Callable]:
+        X = self._path_batch(path1)
+        Y = self._path_batch(path2)
+        order = int(self.config.get("sig_kernel_order", m))
+        max_batch_config = self.config.get("sig_kernel_max_batch")
+        if max_batch_config is None:
+            max_batch = None
+        else:
+            max_batch_int = int(max_batch_config)
+            max_batch = None if max_batch_int <= 0 else max_batch_int
+        sig_kernel = self.SigKernel_polynomial(
+            order=order,
+            static_kernel="linear",
+            solver=self.solver,
+            add_time=False,
+        )
+
+        def signaturekernel_fn(X_arg):
+            return sig_kernel.kernel_matrix(X_arg, Y, max_batch=max_batch)
+
+        output, pullback = self.jax.vjp(signaturekernel_fn, X)
+        cotangent = self.jnp.asarray(
+            self.random_cotangent(output.shape),
+            dtype=output.dtype,
+        )
+        backprop_fn = self.jax.jit(lambda cotangent_arg: pullback(cotangent_arg)[0])
+        return lambda: backprop_fn(cotangent).block_until_ready()
+
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
-        if self.operation not in ("signaturekernel", "signature_kernel", "sigkernel"):
+        if self.operation not in (
+            "signaturekernel",
+            "signature_kernel",
+            "sigkernel",
+            "signaturekernel_backprop",
+        ):
             return None
 
         path1 = self.make_path_input()
         path2 = self.make_path_input()
-        kernel = self.run_signaturekernel(path1, path2, self.d, self.m)
+        if self.operation == "signaturekernel_backprop":
+            kernel = self.run_signaturekernel_backprop(
+                path1,
+                path2,
+                self.d,
+                self.m,
+            )
+            method_prefix = "vjp(SigKernel_polynomial)"
+        else:
+            kernel = self.run_signaturekernel(path1, path2, self.d, self.m)
+            method_prefix = "SigKernel_polynomial"
         if kernel is None:
             return None
 
@@ -87,7 +140,8 @@ class PolySigKernelAdapter(BenchmarkAdapter):
             samples_ms=samples_ms,
             library="polysigkernel",
             method=(
-                "SigKernel_polynomial"
+                method_prefix
+                +
                 f"(order={int(self.config.get('sig_kernel_order', self.m))}, "
                 f"solver={self.solver})"
             ),

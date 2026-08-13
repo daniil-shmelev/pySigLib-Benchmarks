@@ -29,8 +29,14 @@ class TensorDevAdapter(BenchmarkAdapter):
 
     def _path_array(self, path: np.ndarray):
         """Convert path data to a contiguous float32 JAX array during setup."""
-        path_np = np.ascontiguousarray(path, dtype=np.float32)
-        return self.jnp.asarray(path_np, dtype=self.jnp.float32)
+        return self.cached_prepared_input(
+            "tensordev.jax",
+            path,
+            lambda: self.jnp.asarray(
+                np.ascontiguousarray(path, dtype=np.float32),
+                dtype=self.jnp.float32,
+            ),
+        )
 
     def run_signature(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """Prepare TensorDev's native batched signature computation."""
@@ -61,17 +67,47 @@ class TensorDevAdapter(BenchmarkAdapter):
 
         return lambda: self.jax.block_until_ready(logsignature_fn(path_jax))
 
-    def run_sigdiff(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
+    def run_sig_backprop(self, path: np.ndarray, d: int, m: int) -> Optional[Callable]:
         """Prepare differentiation through TensorDev's path signature."""
         path_jax = self._path_array(path)
 
-        def loss_fn(path_arg):
+        def signature_fn(path_arg):
+            return self.tensordev.path_signature(path_arg, trunc=m)[1:]
+
+        output, pullback = self.jax.vjp(signature_fn, path_jax)
+        cotangent = self.jax.tree.map(
+            lambda level: self.jnp.asarray(
+                self.random_cotangent(level.shape),
+                dtype=level.dtype,
+            ),
+            output,
+        )
+        backprop_fn = self.jax.jit(lambda cotangent_arg: pullback(cotangent_arg)[0])
+        return lambda: backprop_fn(cotangent).block_until_ready()
+
+    def run_logsignature_backprop(
+        self, path: np.ndarray, d: int, m: int
+    ) -> Optional[Callable]:
+        path_jax = self._path_array(path)
+
+        def logsignature_fn(path_arg):
             signature = self.tensordev.path_signature(path_arg, trunc=m)
-            return sum(self.jnp.sum(level) for level in signature[1:])
+            return self.tensordev.tensor_logarithm(
+                signature[1:],
+                trunc=m,
+                output_zero_level=False,
+            )
 
-        grad_fn = self.jax.jit(self.jax.grad(loss_fn))
-
-        return lambda: grad_fn(path_jax).block_until_ready()
+        output, pullback = self.jax.vjp(logsignature_fn, path_jax)
+        cotangent = self.jax.tree.map(
+            lambda level: self.jnp.asarray(
+                self.random_cotangent(level.shape),
+                dtype=level.dtype,
+            ),
+            output,
+        )
+        backprop_fn = self.jax.jit(lambda cotangent_arg: pullback(cotangent_arg)[0])
+        return lambda: backprop_fn(cotangent).block_until_ready()
 
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the configured benchmark."""
@@ -83,9 +119,12 @@ class TensorDevAdapter(BenchmarkAdapter):
         elif self.operation == "logsignature":
             kernel = self.run_logsignature(path, self.d, self.m)
             method = "tensor_logarithm(path_signature, word_basis)"
-        elif self.operation == "sigdiff":
-            kernel = self.run_sigdiff(path, self.d, self.m)
-            method = "jax.grad(path_signature)"
+        elif self.operation == "sig_backprop":
+            kernel = self.run_sig_backprop(path, self.d, self.m)
+            method = "vjp(path_signature)"
+        elif self.operation == "logsignature_backprop":
+            kernel = self.run_logsignature_backprop(path, self.d, self.m)
+            method = "vjp(tensor_logarithm(path_signature, word_basis))"
         else:
             return None
 

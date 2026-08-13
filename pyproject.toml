@@ -6,7 +6,6 @@ dependencies = [
     "pyyaml>=6.0.3",
     "matplotlib>=3.9.4",
     "numpy",
-    "fbm>=0.3.0",
     "tqdm",
 ]
 
@@ -28,6 +27,10 @@ signature-rs = [
 log-signatures-pytorch = [
     "torch>=2.9.1",
 ]
+signatory = [
+    "signatory",
+    "torch>=2.9.1",
+]
 pathsig = [
     "cmake>=3.24",
     "ninja>=1.11",
@@ -36,7 +39,8 @@ pathsig = [
     "torch>=2.4",
 ]
 pysiglib = [
-    "pysiglib[cuda]>=3.0.3",
+    "pysiglib[cuda]==4.0.0rc1",
+    "torch>=2.9.1",
 ]
 stochastax = [
     "jax[cuda]",
@@ -62,30 +66,41 @@ all = [
     "chen-signatures==0.2.4",
     # "iisignature",
     "cmake>=3.24",
-    "fbm>=0.3.0",
     "jax[cuda]",
     "ninja>=1.11",
-    "pysiglib[cuda]>=3.0.3",
+    "pysiglib[cuda]==4.0.0rc1",
     "pathsig==0.2.1",
     "RoughPy==0.3.0",
     "scikit-build-core>=0.10",
     "signature-py",
     "stochastax",
     "signax",
+    "signatory",
     "tensordev==0.0.2",
     "keras_sig",
     "torch>=2.9.1",
 ]
 
 [tool.uv.sources]
+torch = [
+    { index = "pytorch-cu130", marker = "sys_platform == 'win32'" },
+]
 stochastax = { git = "https://github.com/luke-a-thompson/Stochastax.git", rev = "09c9612e9352bb05a0a92a30e2bc391cdd2c78e1" }
 keras_sig = { git = "https://github.com/remigenet/keras_sig.git", rev = "32367ad019ede3c31c2b6f3a1197090696d4a8eb" }
 signax = { git = "https://github.com/anh-tong/signax", rev = "4961f361b60d293f4e7679dba028b93dead89c39" }
 polysigkernel = { git = "https://github.com/luke-a-thompson/polysigkernel.git", rev = "807234d4ffc7e123cd3392b78e763c6a41269384" }
+signatory = { git = "https://github.com/datasig-ac-uk/signatory.git", rev = "f263b9d9358c81a144c9d9bb78006745136abbf8" }
 signature-py = { git = "https://github.com/ChosunOne/signature-rs.git", subdirectory = "signature-py", rev = "671b0fba16f1c542e76910c2825a9e8b185d3a93" }
 
 [tool.uv.extra-build-dependencies]
 iisignature = ["numpy"]
+signatory = [{ requirement = "torch", match-runtime = true }]
 
 [tool.uv]
+constraint-dependencies = ["pysiglib-cuda==4.0.0rc1"]
 no-build-isolation-package = ["pathsig"]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
