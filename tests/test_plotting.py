@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 from matplotlib.colors import LogNorm
 
 matplotlib.use("Agg")
@@ -19,6 +20,7 @@ from plotting import (
     _format_heatmap_param_axis,
     _format_number,
     _heatmap_color_scale,
+    _heatmap_color_scales_by_operation,
     _rows_for_operation,
     _series_key,
     load_results,
@@ -79,6 +81,27 @@ def test_heatmap_library_axis_shows_multiple_library_ticks():
     assert show_axis
 
 
+def test_heatmap_library_tick_labels_use_enlarged_font():
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    plotting._configure_heatmap_axes(
+        ax,
+        {
+            "libraries": ["iisignature", "pysiglib"],
+            "params": [(1000, 2)],
+            "show_library_axis": True,
+            "show_param_axis": False,
+        },
+        show_titles=False,
+    )
+
+    assert {label.get_fontsize() for label in ax.get_xticklabels()} == {
+        float(plotting.HEATMAP_LIBRARY_TICK_LABEL_FONT_SIZE),
+    }
+    plt.close(fig)
+
+
 def test_heatmap_color_scale_is_logarithmic():
     norm = _heatmap_color_scale([0.26, 1.6])
 
@@ -92,6 +115,74 @@ def test_heatmap_color_scale_ignores_nonpositive_values():
 
     assert norm.vmin == 0.26
     assert norm.vmax == 3.9
+
+
+def test_heatmap_color_scales_are_shared_by_backend_but_not_operation():
+    rows = [
+        {"operation": "signaturekernel", "backend": "cpu", "t_ms": 20.0},
+        {"operation": "signaturekernel", "backend": "gpu", "t_ms": 0.5},
+        {
+            "operation": "signaturekernel_backprop",
+            "backend": "cpu",
+            "t_ms": 200.0,
+        },
+        {
+            "operation": "signaturekernel_backprop",
+            "backend": "gpu",
+            "t_ms": 10.0,
+        },
+    ]
+
+    scales = _heatmap_color_scales_by_operation(rows)
+
+    assert scales["signaturekernel"].vmin == 0.5
+    assert scales["signaturekernel"].vmax == 20.0
+    assert scales["signaturekernel_backprop"].vmin == 10.0
+    assert scales["signaturekernel_backprop"].vmax == 200.0
+
+
+def test_make_heatmap_plot_uses_backend_shared_operation_scale(
+    tmp_path,
+    monkeypatch,
+):
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(
+        "\n".join([
+            "N,d,m,batch_size,path_kind,operation,backend,language,library,method,path_type,t_ms,alloc_bytes",
+            "1000,2,3,32,brownian,signaturekernel,cpu,python,cpu_lib,method,path,20,0",
+            "1000,4,3,32,brownian,signaturekernel,cpu,python,cpu_lib,method,path,10,0",
+            "1000,2,3,32,brownian,signaturekernel,gpu,python,gpu_lib,method,path,1,0",
+            "1000,4,3,32,brownian,signaturekernel,gpu,python,gpu_lib,method,path,0.5,0",
+        ]),
+        encoding="utf-8",
+    )
+    captured_limits = []
+
+    def capture_limits(
+        ax,
+        matrix,
+        norm,
+        failure_labels=None,
+        fontsize=plotting.HEATMAP_ANNOTATION_FONT_SIZE,
+    ):
+        captured_limits.append((norm.vmin, norm.vmax))
+
+    monkeypatch.setattr(plotting, "_annotate_heatmap", capture_limits)
+
+    make_heatmap_plot(
+        csv_path,
+        tmp_path / "cpu.pdf",
+        operation="signaturekernel",
+        backend="cpu",
+    )
+    make_heatmap_plot(
+        csv_path,
+        tmp_path / "gpu.pdf",
+        operation="signaturekernel",
+        backend="gpu",
+    )
+
+    assert captured_limits == [(0.5, 20.0), (0.5, 20.0)]
 
 
 def test_annotate_heatmap_labels_oom_failures():
@@ -126,7 +217,7 @@ def test_make_heatmap_plot_saves_one_operation_level_figure(tmp_path):
         ]),
         encoding="utf-8",
     )
-    output_path = tmp_path / "plot_heatmap.png"
+    output_path = tmp_path / "plot_heatmap.pdf"
 
     result_path = make_heatmap_plot(
         csv_path,
@@ -161,15 +252,195 @@ def test_make_heatmap_plot_loads_oom_failures(tmp_path, monkeypatch):
     captured_labels = []
     original_annotate = plotting._annotate_heatmap
 
-    def capture_labels(ax, matrix, norm, failure_labels=None, fontsize=10):
+    def capture_labels(
+        ax,
+        matrix,
+        norm,
+        failure_labels=None,
+        fontsize=plotting.HEATMAP_ANNOTATION_FONT_SIZE,
+    ):
         captured_labels.append(failure_labels.copy())
         original_annotate(ax, matrix, norm, failure_labels, fontsize)
 
     monkeypatch.setattr(plotting, "_annotate_heatmap", capture_labels)
 
-    make_heatmap_plot(csv_path, tmp_path / "heatmap.png")
+    make_heatmap_plot(csv_path, tmp_path / "heatmap.pdf")
 
     assert any((labels == "OOM").any() for labels in captured_labels)
+
+
+def test_make_heatmap_plot_includes_oom_only_library(tmp_path, monkeypatch):
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(
+        "\n".join([
+            "N,d,m,batch_size,path_kind,operation,backend,language,library,method,path_type,t_ms,alloc_bytes",
+            "1000,2,3,32,brownian,signaturekernel_backprop,cpu,python,pysiglib,method,path,10,0",
+            "1000,4,3,32,brownian,signaturekernel_backprop,cpu,python,pysiglib,method,path,11,0",
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / "failed_tasks.csv").write_text(
+        "\n".join([
+            "task_id,library,backend,operation,N,d,m,batch_size,error_type,reason",
+            "id1,other,cpu,signaturekernel_backprop,1000,2,3,32,BenchmarkWorkerOOM,worker received SIGKILL",
+            "id2,other,cpu,signaturekernel_backprop,1000,4,3,32,BenchmarkWorkerOOM,worker received SIGKILL",
+        ]),
+        encoding="utf-8",
+    )
+    captured_labels = []
+
+    def capture_labels(
+        ax,
+        matrix,
+        norm,
+        failure_labels=None,
+        fontsize=plotting.HEATMAP_ANNOTATION_FONT_SIZE,
+    ):
+        captured_labels.append(failure_labels.copy())
+
+    monkeypatch.setattr(plotting, "_annotate_heatmap", capture_labels)
+
+    make_heatmap_plot(
+        csv_path,
+        tmp_path / "heatmap.pdf",
+        operation="signaturekernel_backprop",
+        backend="cpu",
+    )
+
+    assert captured_labels[0].shape == (2, 2)
+    assert np.count_nonzero(captured_labels[0] == "OOM") == 2
+
+
+def test_make_heatmap_plot_labels_cuda_tree_launch_limit(tmp_path, monkeypatch):
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(
+        "\n".join([
+            "N,d,m,batch_size,path_kind,operation,backend,language,library,method,path_type,t_ms,alloc_bytes",
+            "1000,2,3,256,brownian,branchedsignature_planar,gpu,python,pysiglib,method,path,10,0",
+            "1000,4,3,256,brownian,branchedsignature_planar,gpu,python,pysiglib,method,path,11,0",
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / "skipped_tasks.csv").write_text(
+        "\n".join([
+            "task_id,library,backend,operation,N,d,m,batch_size,reason",
+            "id,pysiglib,gpu,branchedsignature_planar,1000,8,3,256,CUDA branched sig: num_trees > 1024 not supported",
+        ]),
+        encoding="utf-8",
+    )
+    captured_labels = []
+
+    def capture_labels(
+        ax,
+        matrix,
+        norm,
+        failure_labels=None,
+        fontsize=plotting.HEATMAP_ANNOTATION_FONT_SIZE,
+    ):
+        captured_labels.append(failure_labels.copy())
+
+    monkeypatch.setattr(plotting, "_annotate_heatmap", capture_labels)
+
+    make_heatmap_plot(
+        csv_path,
+        tmp_path / "heatmap.pdf",
+        operation="branchedsignature_planar",
+        backend="gpu",
+    )
+
+    assert captured_labels[0].shape == (3, 1)
+    assert captured_labels[0][2, 0] == "CUDA\nLIMIT"
+
+
+def test_make_heatmap_plot_labels_worker_segfault_as_crash(tmp_path, monkeypatch):
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(
+        "\n".join([
+            "N,d,m,batch_size,path_kind,operation,backend,language,library,method,path_type,t_ms,alloc_bytes",
+            "10000,2,3,256,brownian,logsignature,cpu,python,other,method,path,10,0",
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / "failed_tasks.csv").write_text(
+        "\n".join([
+            "task_id,library,backend,operation,N,d,m,batch_size,error_type,reason",
+            "id,signatory,cpu,logsignature,10000,2,3,256,RuntimeError,signatory: worker exited with code 139",
+        ]),
+        encoding="utf-8",
+    )
+    captured_labels = []
+
+    def capture_labels(
+        ax,
+        matrix,
+        norm,
+        failure_labels=None,
+        fontsize=plotting.HEATMAP_ANNOTATION_FONT_SIZE,
+    ):
+        captured_labels.append(failure_labels.copy())
+
+    monkeypatch.setattr(plotting, "_annotate_heatmap", capture_labels)
+
+    make_heatmap_plot(
+        csv_path,
+        tmp_path / "heatmap.pdf",
+        operation="logsignature",
+        backend="cpu",
+    )
+
+    assert captured_labels[0].shape == (1, 2)
+    assert np.count_nonzero(captured_labels[0] == "Crash") == 1
+
+
+def test_make_heatmap_plot_classifies_log_signatures_pytorch_cuda_errors(
+    tmp_path,
+    monkeypatch,
+):
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(
+        "\n".join([
+            "N,d,m,batch_size,path_kind,operation,backend,language,library,method,path_type,t_ms,alloc_bytes",
+            "10000,8,2,256,brownian,sig_backprop,gpu,python,other,method,path,9,0",
+            "10000,8,3,256,brownian,sig_backprop,gpu,python,other,method,path,10,0",
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / "failed_tasks.csv").write_text(
+        "\n".join([
+            "task_id,library,backend,operation,N,d,m,batch_size,error_type,reason",
+            "id1,log-signatures-pytorch,gpu,sig_backprop,10000,16,3,256,RuntimeError,CUDA error: device not ready",
+            "id2,log-signatures-pytorch,gpu,sig_backprop,10000,16,2,256,RuntimeError,CUDA driver error: invalid argument",
+        ]),
+        encoding="utf-8",
+    )
+    captured_labels = []
+
+    def capture_labels(
+        ax,
+        matrix,
+        norm,
+        failure_labels=None,
+        fontsize=plotting.HEATMAP_ANNOTATION_FONT_SIZE,
+    ):
+        captured_labels.append(failure_labels.copy())
+
+    monkeypatch.setattr(plotting, "_annotate_heatmap", capture_labels)
+
+    make_heatmap_plot(
+        csv_path,
+        tmp_path / "heatmap.pdf",
+        operation="sig_backprop",
+        backend="gpu",
+    )
+
+    all_labels = np.concatenate([labels.ravel() for labels in captured_labels])
+    assert np.count_nonzero(all_labels == "OOM") == 1
+    assert (
+        np.count_nonzero(
+            all_labels == "CUDA\nLIMIT"
+        )
+        == 1
+    )
 
 
 def test_plot_series_keep_cpu_and_gpu_variants_distinct(tmp_path):
@@ -204,3 +475,12 @@ def test_rows_for_operation_keeps_functions_separate():
         {"operation": "logsignature", "backend": "gpu"},
     ]
     assert _rows_for_operation(rows, None) == rows
+
+
+def test_branched_logsignature_operation_labels_are_publication_friendly():
+    assert plotting._operation_label("branchedlogsignature_nonplanar") == (
+        "Non-planar branched log signature"
+    )
+    assert plotting._operation_label(
+        "branchedlogsignature_planar_backprop"
+    ) == "Planar branched log signature backprop"

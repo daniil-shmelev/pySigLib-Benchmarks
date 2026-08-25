@@ -13,31 +13,39 @@ from matplotlib.ticker import FuncFormatter
 
 SeriesKey = Tuple[str, str, str, str, int]
 
+BASE_FONT_SIZE = 13
+AXIS_LABEL_FONT_SIZE = 16
+AXIS_TITLE_FONT_SIZE = 16
+LEGEND_FONT_SIZE = 12
+TICK_LABEL_FONT_SIZE = 12
+HEATMAP_LIBRARY_TICK_LABEL_FONT_SIZE = 16
+HEATMAP_ANNOTATION_FONT_SIZE = 12
+
 plt.rcParams.update({
     "axes.edgecolor": "#4B5563",
     "axes.labelcolor": "#1F2937",
-    "axes.labelsize": 15,
+    "axes.labelsize": AXIS_LABEL_FONT_SIZE,
     "axes.spines.right": False,
     "axes.spines.top": False,
     "axes.titlecolor": "#111827",
-    "axes.titlesize": 16,
+    "axes.titlesize": AXIS_TITLE_FONT_SIZE,
     "axes.titleweight": "semibold",
     "figure.facecolor": "white",
     "font.family": "serif",
-    "font.size": 13,
+    "font.size": BASE_FONT_SIZE,
     "font.serif": ["Times New Roman", "Times", "Liberation Serif", "DejaVu Serif"],
     "grid.color": "#D1D5DB",
     "grid.linewidth": 0.7,
     "legend.frameon": False,
-    "legend.fontsize": 12,
+    "legend.fontsize": LEGEND_FONT_SIZE,
     "lines.linewidth": 2.0,
     "mathtext.fontset": "stix",
     "mathtext.rm": "Times New Roman",
     "savefig.facecolor": "white",
     "xtick.color": "#374151",
-    "xtick.labelsize": 12,
+    "xtick.labelsize": TICK_LABEL_FONT_SIZE,
     "ytick.color": "#374151",
-    "ytick.labelsize": 12,
+    "ytick.labelsize": TICK_LABEL_FONT_SIZE,
 })
 
 
@@ -65,8 +73,12 @@ def _operation_label(operation: str) -> str:
         "logsignature_backprop": "Log signature backprop",
         "branchedsignature_nonplanar": "Non-planar branched signature",
         "branchedsignature_nonplanar_backprop": "Non-planar branched backprop",
+        "branchedlogsignature_nonplanar": "Non-planar branched log signature",
+        "branchedlogsignature_nonplanar_backprop": "Non-planar branched log signature backprop",
         "branchedsignature_planar": "Planar branched signature",
         "branchedsignature_planar_backprop": "Planar branched backprop",
+        "branchedlogsignature_planar": "Planar branched log signature",
+        "branchedlogsignature_planar_backprop": "Planar branched log signature backprop",
         "signaturekernel": "Signature kernel",
         "signaturekernel_backprop": "Signature kernel backprop",
     }
@@ -135,8 +147,12 @@ def _ordered_operations(rows: List[Dict[str, Any]]) -> List[str]:
         "logsignature_backprop",
         "branchedsignature_nonplanar",
         "branchedsignature_nonplanar_backprop",
+        "branchedlogsignature_nonplanar",
+        "branchedlogsignature_nonplanar_backprop",
         "branchedsignature_planar",
         "branchedsignature_planar_backprop",
+        "branchedlogsignature_planar",
+        "branchedlogsignature_planar_backprop",
         "signaturekernel",
         "signaturekernel_backprop",
     ]
@@ -252,7 +268,12 @@ def _configure_heatmap_axes(
 
     if panel["show_library_axis"]:
         ax.set_xticks(np.arange(len(libraries)))
-        ax.set_xticklabels(libraries, rotation=45, ha="right")
+        ax.set_xticklabels(
+            libraries,
+            rotation=45,
+            ha="right",
+            fontsize=HEATMAP_LIBRARY_TICK_LABEL_FONT_SIZE,
+        )
         ax.set_xlabel("")
     else:
         ax.set_xticks([])
@@ -260,7 +281,10 @@ def _configure_heatmap_axes(
 
     if panel["show_param_axis"]:
         ax.set_yticks(np.arange(len(params)))
-        ax.set_yticklabels(panel["param_labels"], fontsize=12)
+        ax.set_yticklabels(
+            panel["param_labels"],
+            fontsize=TICK_LABEL_FONT_SIZE,
+        )
         ax.set_ylabel(panel["param_ylabel"])
     else:
         ax.set_yticks([])
@@ -275,7 +299,7 @@ def _annotate_heatmap(
     matrix: np.ndarray,
     norm: LogNorm,
     failure_labels: Optional[np.ndarray] = None,
-    fontsize: int = 10,
+    fontsize: int = HEATMAP_ANNOTATION_FONT_SIZE,
 ) -> None:
     """Add runtime text labels to heatmap cells."""
     for i in range(matrix.shape[0]):
@@ -311,7 +335,7 @@ def _annotate_heatmap(
 
 
 def _heatmap_color_scale(values: List[float]) -> LogNorm:
-    """Choose logarithmic color limits for one heatmap panel."""
+    """Choose logarithmic color limits for a collection of runtimes."""
     positive_values = [value for value in values if np.isfinite(value) and value > 0.0]
     if not positive_values:
         return LogNorm(vmin=1.0, vmax=10.0)
@@ -321,6 +345,20 @@ def _heatmap_color_scale(values: List[float]) -> LogNorm:
     if data_min == data_max:
         return LogNorm(vmin=data_min / 1.05, vmax=data_max * 1.05)
     return LogNorm(vmin=data_min, vmax=data_max)
+
+
+def _heatmap_color_scales_by_operation(
+    rows: List[Dict[str, Any]],
+) -> Dict[str, LogNorm]:
+    """Share one logarithmic color scale across all backends for each operation."""
+    return {
+        operation: _heatmap_color_scale([
+            row["t_ms"]
+            for row in rows
+            if row["operation"] == operation
+        ])
+        for operation in _ordered_operations(rows)
+    }
 
 
 def make_heatmap_plot(
@@ -345,8 +383,9 @@ def make_heatmap_plot(
     Returns:
         Path to saved plot
     """
-    rows = _rows_for_operation(load_results(csv_path), operation, backend)
-    oom_failures = set()
+    all_rows = load_results(csv_path)
+    rows = _rows_for_operation(all_rows, operation, backend)
+    failure_labels_by_task: Dict[Tuple[Any, ...], str] = {}
     failed_tasks_path = csv_path.parent / "failed_tasks.csv"
     if failed_tasks_path.exists():
         with failed_tasks_path.open("r", encoding="utf-8", newline="") as f:
@@ -355,20 +394,57 @@ def make_heatmap_plot(
                     failure.get("error_type", ""),
                     failure.get("reason", ""),
                 ]).lower()
-                if not (
+                library = failure.get("library", "").strip()
+                is_log_signatures_pytorch = (
+                    library == "log-signatures-pytorch"
+                )
+                if (
                     "oom" in error_text
                     or "out of memory" in error_text
                     or "memoryerror" in error_text
+                    or (
+                        is_log_signatures_pytorch
+                        and "cuda error: device not ready" in error_text
+                    )
                 ):
+                    failure_label = "OOM"
+                elif "worker exited with code 139" in error_text:
+                    failure_label = "Crash"
+                elif (
+                    is_log_signatures_pytorch
+                    and "cuda driver error: invalid argument" in error_text
+                ):
+                    failure_label = "CUDA\nLIMIT"
+                else:
                     continue
-                oom_failures.add((
+                task_key = (
                     failure.get("operation", "").strip(),
                     failure.get("backend", "").strip(),
                     int(failure["m"]),
                     int(failure["N"]),
                     int(failure["d"]),
-                    failure.get("library", "").strip(),
-                ))
+                    library,
+                    int(failure.get("batch_size") or 1),
+                )
+                failure_labels_by_task[task_key] = failure_label
+
+    skipped_tasks_path = csv_path.parent / "skipped_tasks.csv"
+    if skipped_tasks_path.exists():
+        with skipped_tasks_path.open("r", encoding="utf-8", newline="") as f:
+            for skipped in csv.DictReader(f):
+                reason = skipped.get("reason", "").lower()
+                if "num_trees > 1024" not in reason:
+                    continue
+                task_key = (
+                    skipped.get("operation", "").strip(),
+                    skipped.get("backend", "").strip(),
+                    int(skipped["m"]),
+                    int(skipped["N"]),
+                    int(skipped["d"]),
+                    skipped.get("library", "").strip(),
+                    int(skipped.get("batch_size") or 1),
+                )
+                failure_labels_by_task[task_key] = "CUDA\nLIMIT"
 
     if not rows:
         raise ValueError("No benchmark results found in CSV")
@@ -377,6 +453,7 @@ def make_heatmap_plot(
     operations = _ordered_operations(rows)
     depths = sorted(set(r["m"] for r in rows))
     backends = sorted(set(r.get("backend", "") for r in rows))
+    operation_norms = _heatmap_color_scales_by_operation(all_rows)
     panels: List[Dict[str, Any]] = []
 
     for depth_idx, m in enumerate(depths):
@@ -396,12 +473,33 @@ def make_heatmap_plot(
                 if not op_rows:
                     continue
 
-                series_keys = sorted(set(_series_key(r) for r in op_rows))
+                panel_failures = {
+                    task_key: label
+                    for task_key, label in failure_labels_by_task.items()
+                    if task_key[:3] == (operation, backend, m)
+                }
+                series_key_set = set(_series_key(r) for r in op_rows)
+                for failure in panel_failures:
+                    library = failure[5]
+                    batch_size = failure[6]
+                    if not any(
+                        key[0] == library
+                        and key[1] == backend
+                        and key[4] == batch_size
+                        for key in series_key_set
+                    ):
+                        series_key_set.add(
+                            (library, backend, "", "", batch_size)
+                        )
+                series_keys = sorted(series_key_set)
                 libraries = [
                     _series_label(key, include_backend=False)
                     for key in series_keys
                 ]
-                params = sorted(set((r["N"], r["d"]) for r in op_rows))
+                params = sorted(
+                    set((r["N"], r["d"]) for r in op_rows)
+                    | {(failure[3], failure[4]) for failure in panel_failures}
+                )
                 param_labels, param_ylabel, fixed_params_title, show_param_axis = (
                     _format_heatmap_param_axis(params)
                 )
@@ -424,18 +522,22 @@ def make_heatmap_plot(
                         t_ms = result_by_key.get((N, d, series_key))
                         if t_ms is not None:
                             matrix[row_idx, col_idx] = t_ms
-                        elif (
-                            operation,
-                            backend,
-                            m,
-                            N,
-                            d,
-                            series_key[0],
-                        ) in oom_failures:
-                            failure_labels[row_idx, col_idx] = "OOM"
+                        else:
+                            failure_label = failure_labels_by_task.get(
+                                (
+                                    operation,
+                                    backend,
+                                    m,
+                                    N,
+                                    d,
+                                    series_key[0],
+                                    series_key[4],
+                                )
+                            )
+                            if failure_label:
+                                failure_labels[row_idx, col_idx] = failure_label
 
-                finite_values = matrix[np.isfinite(matrix)]
-                norm = _heatmap_color_scale([float(v) for v in finite_values])
+                norm = operation_norms[operation]
 
                 title_parts = [_operation_label(operation)]
                 if backend:
@@ -517,7 +619,7 @@ def make_heatmap_plot(
         cbar.set_label("Runtime (ms, log scale)")
 
     if output_path is None:
-        output_path = csv_path.parent / "plot_heatmap.png"
+        output_path = csv_path.parent / "plot_heatmap.pdf"
 
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Heatmap plot saved to: {output_path}")
@@ -607,7 +709,7 @@ Examples:
                 continue
             output_path = plot_dir / (
                 f"{_safe_filename_part(operation)}_"
-                f"{_safe_filename_part(backend)}.png"
+                f"{_safe_filename_part(backend)}.pdf"
             )
             try:
                 make_heatmap_plot(
