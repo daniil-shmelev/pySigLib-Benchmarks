@@ -142,6 +142,8 @@ def test_python_worker_reuses_process_and_recovers_after_task_error(tmp_path):
     adapter_path.write_text(
         "\n".join([
             "import os",
+            "import sys",
+            "common_loaded_before_adapter = 'common' in sys.modules",
             "from common import BenchmarkAdapter",
             "task_count = 0",
             "class TestAdapter(BenchmarkAdapter):",
@@ -151,7 +153,7 @@ def test_python_worker_reuses_process_and_recovers_after_task_error(tmp_path):
             "        if self.N == 4:",
             "            print('native diagnostic', end='', flush=True)",
             "            raise RuntimeError('expected task failure')",
-            "        return {'pid': os.getpid(), 'task_count': task_count}",
+            "        return {'pid': os.getpid(), 'task_count': task_count, 'common_loaded_before_adapter': common_loaded_before_adapter}",
         ]),
         encoding="utf-8",
     )
@@ -196,6 +198,7 @@ def test_python_worker_reuses_process_and_recovers_after_task_error(tmp_path):
     assert result["status"] == "result"
     assert result["result"]["pid"] == process.pid
     assert result["result"]["task_count"] == 2
+    assert result["result"]["common_loaded_before_adapter"] is False
 
     process.stdin.close()
     assert process.wait(timeout=5) == 0
@@ -352,6 +355,11 @@ def test_cgroup_worker_forwards_changed_environment(monkeypatch):
         "which",
         lambda command, **kwargs: f"/usr/bin/{command}",
     )
+    monkeypatch.setattr(
+        orchestrator,
+        "systemd_user_manager_available",
+        lambda env: True,
+    )
     monkeypatch.setattr(orchestrator.subprocess, "Popen", fake_popen)
 
     worker = orchestrator.PythonAdapterWorker("example", {})
@@ -366,6 +374,48 @@ def test_cgroup_worker_forwards_changed_environment(monkeypatch):
     )
     assert "/opt/uv/bin/uv" in captured["command"]
     assert captured["env"]["PYTHONPATH"] == "/tmp/adapter-package"
+
+
+def test_worker_without_user_systemd_starts_directly(monkeypatch):
+    captured = {}
+    script_path = Path("adapter.py")
+
+    class FakeProcess:
+        stdout = io.StringIO()
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        return FakeProcess()
+
+    monkeypatch.setattr(orchestrator.os, "name", "posix")
+    monkeypatch.setattr(
+        orchestrator,
+        "prepare_python_adapter_process",
+        lambda *args: (
+            script_path,
+            ["uv", "run"],
+            {"PATH": "/usr/bin", "UV": "/opt/uv/bin/uv"},
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator.shutil,
+        "which",
+        lambda command, **kwargs: f"/usr/bin/{command}",
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "systemd_user_manager_available",
+        lambda env: False,
+    )
+    monkeypatch.setattr(orchestrator.subprocess, "Popen", fake_popen)
+
+    worker = orchestrator.PythonAdapterWorker("example", {})
+    worker._memory_limit_bytes = 1024
+    monkeypatch.setattr(worker, "_read_response", lambda: {"status": "ready"})
+    worker._start()
+
+    assert captured["command"][0] == "/opt/uv/bin/uv"
+    assert "systemd-run" not in captured["command"]
 
 
 def test_worker_memory_limit_does_not_change_task_identity():

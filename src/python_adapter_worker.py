@@ -11,10 +11,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Type
 
-from common import BenchmarkAdapter
-from common.adapter import clear_cached_inputs
-
-
 PROTOCOL_PREFIX = "__PYSIGLIB_BENCHMARK_WORKER__"
 
 
@@ -30,6 +26,8 @@ def load_adapter_module(script_path: Path) -> ModuleType:
 
 
 def find_adapter_class(module: ModuleType) -> Type[BenchmarkAdapter]:
+    from common import BenchmarkAdapter
+
     candidates = [
         value
         for value in vars(module).values()
@@ -58,6 +56,7 @@ def main() -> int:
     try:
         script_path = Path(sys.argv[1]).resolve()
         adapter_class = find_adapter_class(load_adapter_module(script_path))
+        from common.adapter import clear_cached_inputs
     except Exception as error:
         send_response({
             "status": "startup_error",

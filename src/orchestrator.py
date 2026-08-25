@@ -591,6 +591,25 @@ def prepare_python_adapter_process(
     return script_path, command, env
 
 
+def systemd_user_manager_available(env: Dict[str, str]) -> bool:
+    """Return whether a usable systemd user manager is reachable."""
+    systemctl = shutil.which("systemctl", path=env.get("PATH"))
+    if systemctl is None:
+        return False
+    try:
+        result = subprocess.run(
+            [systemctl, "--user", "show-environment"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 class PythonAdapterWorker:
     """Run every task for one Python library/backend in one process."""
 
@@ -897,7 +916,10 @@ class PythonAdapterWorker:
             if worker_executable is not None:
                 command[0] = worker_executable
             systemd_run = shutil.which("systemd-run", path=env.get("PATH"))
-            if systemd_run is not None:
+            if (
+                systemd_run is not None
+                and systemd_user_manager_available(env)
+            ):
                 changed_environment = [
                     f"--setenv={key}={value}"
                     for key, value in sorted(env.items())

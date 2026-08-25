@@ -46,6 +46,8 @@ from common import BenchmarkAdapter
 class ChenSignaturesAdapter(BenchmarkAdapter):
     """Adapter for chen-signatures library"""
 
+    WORKER_SCOPE = "task"
+
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         # Import here to avoid import errors if not available
