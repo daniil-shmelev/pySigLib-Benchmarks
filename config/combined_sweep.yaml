@@ -21,8 +21,12 @@ operations:
     - logsignature_backprop
     - branchedsignature_nonplanar
     - branchedsignature_nonplanar_backprop
+    - branchedlogsignature_nonplanar
+    - branchedlogsignature_nonplanar_backprop
     - branchedsignature_planar
     - branchedsignature_planar_backprop
+    - branchedlogsignature_planar
+    - branchedlogsignature_planar_backprop
     - signaturekernel
     - signaturekernel_backprop
 
@@ -41,6 +45,11 @@ sig_kernel_max_batch: -1
 library_configs:
     polysigkernel:
         sig_kernel_order: 3
+    sigkerax:
+        sig_kernel_refinement_factor: 1
+    sigkernel:
+        sig_kernel_dyadic_order: 0
+        sig_kernel_max_batch: 4
     pysiglib:
         sig_kernel_dyadic_order: 1
 

@@ -1,6 +1,8 @@
 # Forward and backward signature sweep for the pySigLib paper.
 
 libraries:
+    - iisignature
+    - roughpy
     - log-signatures-pytorch
     - signatory
     - pathsig
@@ -9,6 +11,7 @@ libraries:
     - signax
     - tensordev
     - keras_sig
+    - chen-signatures
 
 path_kind: "brownian"
 seed: 20260529

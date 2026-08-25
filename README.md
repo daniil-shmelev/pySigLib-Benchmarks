@@ -40,6 +40,7 @@ Each problem can also be run independently:
 uv run run_paper_signatures.py
 uv run run_paper_logsignatures.py
 uv run run_paper_branched_signatures.py
+uv run run_paper_branched_logsignatures.py
 uv run run_paper_signature_kernels.py
 ```
 
@@ -89,6 +90,7 @@ uv run src/plotting.py runs/benchmark_TIMESTAMP
 | `config/paper_signatures_sweep.yaml` | Forward signatures and `sig_backprop`; `N=10000` | 256 | 3 |
 | `config/paper_logsignatures_sweep.yaml` | Forward log-signatures and backprop; `N=1000` | 256 | 3 |
 | `config/paper_branched_signatures_sweep.yaml` | Forward planar/non-planar branched signatures and backprop; `N=1000` | 256 | 3 |
+| `config/paper_branched_logsignatures_sweep.yaml` | Forward planar/non-planar branched log-signatures and backprop; `N=1000` | 256 | 3 |
 | `config/paper_signature_kernel_sweep.yaml` | Forward signature kernels and backprop; `N=1000` | 32 x 32 | 3 |
 | `config/signature_kernel_sweep.yaml` | Signature kernels; `N=200,400,800`, `d=2,4,8,16` | 32 × 32 | 10 |
 | `config/combined_sweep.yaml` | All operations on the kernel-safe grid | 32 | 10 |
@@ -111,6 +113,8 @@ paper sweep YAML to change its package list or parameter grid.
 | `pathsig` | GPU | signature, logsignature, backprop |
 | `pysiglib` | CPU, GPU | signature, logsignature, planar/non-planar branched signature, signature kernel, backprop |
 | `polysigkernel` | CPU, GPU | signature kernel, backprop |
+| `sigkerax` | CPU, GPU | signature kernel, backprop |
+| `sigkernel` | GPU | signature kernel, backprop |
 | `stochastax` | CPU, GPU | signature, logsignature, planar/non-planar branched signature, backprop |
 | `signax` | CPU, GPU | signature, logsignature, backprop |
 | `tensordev` | CPU, GPU | signature, logsignature, backprop |

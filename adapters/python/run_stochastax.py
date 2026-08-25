@@ -247,6 +247,99 @@ class StochastaxAdapter(BenchmarkAdapter):
             )
         return self._vjp_kernel(function, path_jax)
 
+    def run_branchedlogsignature(
+        self,
+        path: np.ndarray,
+        d: int,
+        m: int,
+        *,
+        planar: bool,
+    ) -> Optional[Callable]:
+        """Prepare a planar or non-planar branched log-signature kernel."""
+        path_jax = self._path_array(path)
+        cov_increments = self._zero_cov_increments(path_jax)
+
+        if planar:
+            hopf = self.MKWHopfAlgebra.build(d, m)
+
+            def branchedlogsignature_one(path_arg, cov_arg):
+                return self.compute_planar_branched_signature(
+                    path_arg,
+                    m,
+                    hopf,
+                    "full",
+                    cov_arg,
+                ).log().flatten()
+
+        else:
+            hopf = self.GLHopfAlgebra.build(d, m)
+
+            def branchedlogsignature_one(path_arg, cov_arg):
+                return self.compute_nonplanar_branched_signature(
+                    path_arg,
+                    m,
+                    hopf,
+                    "full",
+                    cov_arg,
+                ).log().flatten()
+
+        if path_jax.ndim == 3:
+            branchedlogsignature_fn = self.jax.jit(
+                self.jax.vmap(branchedlogsignature_one)
+            )
+        else:
+            branchedlogsignature_fn = self.jax.jit(branchedlogsignature_one)
+
+        return lambda: branchedlogsignature_fn(
+            path_jax,
+            cov_increments,
+        ).block_until_ready()
+
+    def run_branchedlogsignature_backprop(
+        self,
+        path: np.ndarray,
+        d: int,
+        m: int,
+        *,
+        planar: bool,
+    ) -> Optional[Callable]:
+        path_jax = self._path_array(path)
+        cov_increments = self._zero_cov_increments(path_jax)
+
+        if planar:
+            hopf = self.MKWHopfAlgebra.build(d, m)
+
+            def branchedlogsignature_one(path_arg, cov_arg):
+                return self.compute_planar_branched_signature(
+                    path_arg,
+                    m,
+                    hopf,
+                    "full",
+                    cov_arg,
+                ).log().flatten()
+
+        else:
+            hopf = self.GLHopfAlgebra.build(d, m)
+
+            def branchedlogsignature_one(path_arg, cov_arg):
+                return self.compute_nonplanar_branched_signature(
+                    path_arg,
+                    m,
+                    hopf,
+                    "full",
+                    cov_arg,
+                ).log().flatten()
+
+        if path_jax.ndim == 3:
+            vmapped = self.jax.vmap(branchedlogsignature_one)
+            function = lambda path_arg: vmapped(path_arg, cov_increments)
+        else:
+            function = lambda path_arg: branchedlogsignature_one(
+                path_arg,
+                cov_increments,
+            )
+        return self._vjp_kernel(function, path_jax)
+
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
         # Generate path input during setup. Stochastax single-path APIs are
@@ -288,6 +381,38 @@ class StochastaxAdapter(BenchmarkAdapter):
                 planar=True,
             )
             method = "vjp(compute_planar_branched_signature)"
+        elif self.operation == "branchedlogsignature_nonplanar":
+            kernel = self.run_branchedlogsignature(
+                path,
+                self.d,
+                self.m,
+                planar=False,
+            )
+            method = "log(compute_nonplanar_branched_signature)"
+        elif self.operation == "branchedlogsignature_planar":
+            kernel = self.run_branchedlogsignature(
+                path,
+                self.d,
+                self.m,
+                planar=True,
+            )
+            method = "log(compute_planar_branched_signature)"
+        elif self.operation == "branchedlogsignature_nonplanar_backprop":
+            kernel = self.run_branchedlogsignature_backprop(
+                path,
+                self.d,
+                self.m,
+                planar=False,
+            )
+            method = "vjp(log(compute_nonplanar_branched_signature))"
+        elif self.operation == "branchedlogsignature_planar_backprop":
+            kernel = self.run_branchedlogsignature_backprop(
+                path,
+                self.d,
+                self.m,
+                planar=True,
+            )
+            method = "vjp(log(compute_planar_branched_signature))"
         else:
             # Operation not supported
             return None

@@ -18,7 +18,9 @@ operations:
     - logsignature
     - sig_backprop
     - branchedsignature_nonplanar
+    - branchedlogsignature_nonplanar
     - branchedsignature_planar
+    - branchedlogsignature_planar
 
 # Backend labels defined per library in libraries_registry.yaml.
 # Use [cpu], [gpu], or [cpu, gpu] to choose the experiment scope.

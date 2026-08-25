@@ -3,6 +3,8 @@
 libraries:
     - pysiglib
     - polysigkernel
+    - sigkerax
+    - sigkernel
 
 path_kind: "brownian"
 seed: 20260529
@@ -32,6 +34,12 @@ sig_kernel_max_batch: -1
 library_configs:
     polysigkernel:
         sig_kernel_order: 3
+    sigkerax:
+        sig_kernel_refinement_factor: 1
+    # CUDA supports fewer than 1024 refined path intervals in sigkernel.
+    sigkernel:
+        sig_kernel_dyadic_order: 0
+        sig_kernel_max_batch: 4
     pysiglib:
         sig_kernel_dyadic_order: 1
         backend_configs:

@@ -57,7 +57,8 @@ class BenchmarkAdapter:
                 - path_kind: "linear", "sin", or "brownian"
                 - operation: "signature", "logsignature", "sig_backprop",
                   "branchedsignature_nonplanar", "branchedsignature_planar",
-                  or "signaturekernel"
+                  "branchedlogsignature_nonplanar",
+                  "branchedlogsignature_planar", or "signaturekernel"
                 - repeats: Number of timing repetitions
                 - warmup_iterations: Number of untimed warmup iterations
                 - timing_statistic: Summary stored in t_ms ("median" or "min")

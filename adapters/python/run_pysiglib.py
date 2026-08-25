@@ -300,6 +300,104 @@ class PySigLibAdapter(BenchmarkAdapter):
 
         return backprop_fn
 
+    def run_branchedlogsignature(
+        self,
+        path: np.ndarray,
+        d: int,
+        m: int,
+        *,
+        planar: bool,
+    ) -> Optional[Callable]:
+        """Prepare a planar or non-planar branched log-signature kernel."""
+        if (
+            self.backend == "gpu"
+            and self.pysiglib.branched_sig_length(
+                d,
+                m,
+                planar=planar,
+                scalar_term=False,
+            ) > 1024
+        ):
+            raise RuntimeError(
+                "CUDA branched sig: num_trees > 1024 not supported"
+            )
+
+        path = self._path_array(path)
+        self.pysiglib.prepare_branched_sig(d, m, planar=planar)
+
+        def branchedlogsignature_fn():
+            result = self.pysiglib.branched_log_sig(
+                path,
+                degree=m,
+                planar=planar,
+                n_jobs=self.n_jobs,
+            )
+            return self._synchronize(result)
+
+        return branchedlogsignature_fn
+
+    def run_branchedlogsignature_backprop(
+        self,
+        path: np.ndarray,
+        d: int,
+        m: int,
+        *,
+        planar: bool,
+    ) -> Optional[Callable]:
+        if (
+            self.backend == "gpu"
+            and self.pysiglib.branched_sig_length(
+                d,
+                m,
+                planar=planar,
+                scalar_term=False,
+            ) > 1024
+        ):
+            raise RuntimeError(
+                "CUDA branched sig: num_trees > 1024 not supported"
+            )
+
+        path = self._path_array(path)
+        self.pysiglib.prepare_branched_sig(d, m, planar=planar)
+        branched_signature = self.pysiglib.branched_sig(
+            path,
+            degree=m,
+            planar=planar,
+            n_jobs=self.n_jobs,
+        )
+        output = self.pysiglib.branched_sig_to_log_sig(
+            branched_signature,
+            d,
+            m,
+            planar=planar,
+            n_jobs=self.n_jobs,
+        )
+        self._synchronize(output)
+        cotangent = self._cotangent(output)
+
+        def backprop_fn():
+            branched_signature_cotangent = (
+                self.pysiglib.branched_sig_to_log_sig_backprop(
+                    branched_signature,
+                    cotangent,
+                    d,
+                    m,
+                    planar=planar,
+                    n_jobs=self.n_jobs,
+                )
+            )
+            result = self.pysiglib.branched_sig_backprop(
+                path,
+                branched_signature,
+                branched_signature_cotangent,
+                m,
+                planar=planar,
+                n_jobs=self.n_jobs,
+            )
+            return self._synchronize(result)
+
+        return backprop_fn
+
     def run_signaturekernel(
         self,
         path1: np.ndarray,
@@ -413,6 +511,38 @@ class PySigLibAdapter(BenchmarkAdapter):
                 planar=True,
             )
             method = "branched_sig_backprop(planar=True)"
+        elif self.operation == "branchedlogsignature_nonplanar":
+            kernel = self.run_branchedlogsignature(
+                path,
+                self.d,
+                self.m,
+                planar=False,
+            )
+            method = "branched_log_sig(planar=False)"
+        elif self.operation == "branchedlogsignature_planar":
+            kernel = self.run_branchedlogsignature(
+                path,
+                self.d,
+                self.m,
+                planar=True,
+            )
+            method = "branched_log_sig(planar=True)"
+        elif self.operation == "branchedlogsignature_nonplanar_backprop":
+            kernel = self.run_branchedlogsignature_backprop(
+                path,
+                self.d,
+                self.m,
+                planar=False,
+            )
+            method = "branched_log_sig_backprop(planar=False)"
+        elif self.operation == "branchedlogsignature_planar_backprop":
+            kernel = self.run_branchedlogsignature_backprop(
+                path,
+                self.d,
+                self.m,
+                planar=True,
+            )
+            method = "branched_log_sig_backprop(planar=True)"
         elif self.operation in ("signaturekernel", "signature_kernel", "sigkernel"):
             path2 = self.make_path_input()
             kernel = self.run_signaturekernel(path, path2, self.d, self.m)

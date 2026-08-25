@@ -15,6 +15,8 @@ SIGNATURE_OPERATIONS = {
     "sig_backprop",
     "branchedsignature_nonplanar",
     "branchedsignature_planar",
+    "branchedlogsignature_nonplanar",
+    "branchedlogsignature_planar",
 }
 KERNEL_OPERATIONS = {"signaturekernel"}
 BACKPROP_OPERATIONS = {
@@ -22,9 +24,13 @@ BACKPROP_OPERATIONS = {
     "logsignature_backprop",
     "branchedsignature_nonplanar_backprop",
     "branchedsignature_planar_backprop",
+    "branchedlogsignature_nonplanar_backprop",
+    "branchedlogsignature_planar_backprop",
     "signaturekernel_backprop",
 }
 PAPER_SIGNATURE_LIBRARIES = {
+    "iisignature",
+    "roughpy",
     "log-signatures-pytorch",
     "signatory",
     "pathsig",
@@ -33,18 +39,31 @@ PAPER_SIGNATURE_LIBRARIES = {
     "signax",
     "tensordev",
     "keras_sig",
+    "chen-signatures",
 }
-PAPER_LOGSIGNATURE_LIBRARIES = PAPER_SIGNATURE_LIBRARIES - {"keras_sig"}
+PAPER_LOGSIGNATURE_LIBRARIES = (
+    PAPER_SIGNATURE_LIBRARIES
+    | {"signature-rs"}
+) - {"keras_sig"}
 PAPER_BRANCHED_LIBRARIES = {"pysiglib", "stochastax"}
-PAPER_KERNEL_LIBRARIES = {"pysiglib", "polysigkernel"}
+PAPER_KERNEL_LIBRARIES = {
+    "pysiglib",
+    "polysigkernel",
+    "sigkerax",
+    "sigkernel",
+}
 PAPER_JAX_LIBRARIES = {
     "polysigkernel",
+    "sigkerax",
     "stochastax",
     "signax",
     "tensordev",
     "keras_sig",
 }
-PAPER_TORCH_CPU_LIBRARIES = {"log-signatures-pytorch", "signatory"}
+PAPER_TORCH_CPU_LIBRARIES = {
+    "log-signatures-pytorch",
+    "signatory",
+}
 
 
 def _load_yaml(name: str) -> dict:
@@ -101,10 +120,13 @@ def test_problem_specific_paper_sweeps():
     signatures = _load_yaml("paper_signatures_sweep.yaml")
     logsignatures = _load_yaml("paper_logsignatures_sweep.yaml")
     branched = _load_yaml("paper_branched_signatures_sweep.yaml")
+    branched_logsignatures = _load_yaml(
+        "paper_branched_logsignatures_sweep.yaml"
+    )
     kernels = _load_yaml("paper_signature_kernel_sweep.yaml")
 
     _assert_paper_settings(signatures, expected_N=10000)
-    for paper in (logsignatures, branched, kernels):
+    for paper in (logsignatures, branched, branched_logsignatures, kernels):
         _assert_paper_settings(paper)
 
     assert set(signatures["libraries"]) == PAPER_SIGNATURE_LIBRARIES
@@ -124,17 +146,43 @@ def test_problem_specific_paper_sweeps():
         "branchedsignature_planar",
         "branchedsignature_planar_backprop",
     }
+    assert set(branched_logsignatures["libraries"]) == PAPER_BRANCHED_LIBRARIES
+    assert set(branched_logsignatures["operations"]) == {
+        "branchedlogsignature_nonplanar",
+        "branchedlogsignature_nonplanar_backprop",
+        "branchedlogsignature_planar",
+        "branchedlogsignature_planar_backprop",
+    }
     assert set(kernels["libraries"]) == PAPER_KERNEL_LIBRARIES
     assert set(kernels["operations"]) == {
         "signaturekernel",
         "signaturekernel_backprop",
     }
+    assert kernels["library_configs"]["sigkerax"][
+        "sig_kernel_refinement_factor"
+    ] == 1
+    assert kernels["library_configs"]["sigkernel"] == {
+        "sig_kernel_dyadic_order": 0,
+        "sig_kernel_max_batch": 4,
+    }
 
     registry = _load_yaml("libraries_registry.yaml")["libraries"]
-    for paper in (signatures, logsignatures, branched, kernels):
+    for paper in (
+        signatures,
+        logsignatures,
+        branched,
+        branched_logsignatures,
+        kernels,
+    ):
         operations = set(paper["operations"])
+        eligible_libraries = {
+            library_name
+            for library_name, library_config in registry.items()
+            if operations & set(library_config["operations"])
+        }
+        assert set(paper["libraries"]) == eligible_libraries
         for library_name in paper["libraries"]:
-            assert operations <= set(registry[library_name]["operations"])
+            assert operations & set(registry[library_name]["operations"])
 
         pysiglib_config = paper["library_configs"]["pysiglib"]
         assert pysiglib_config["backend_configs"]["cpu"]["n_jobs"] == -1

@@ -108,6 +108,10 @@ libraries:
       - branchedsignature_planar
       - branchedsignature_nonplanar_backprop
       - branchedsignature_planar_backprop
+      - branchedlogsignature_nonplanar
+      - branchedlogsignature_planar
+      - branchedlogsignature_nonplanar_backprop
+      - branchedlogsignature_planar_backprop
       - signaturekernel
       - signaturekernel_backprop
 
@@ -125,6 +129,43 @@ libraries:
       - name: gpu
         env:
           JAX_PLATFORM_NAME: gpu
+    operations:
+      - signaturekernel
+      - signaturekernel_backprop
+
+  sigkerax:
+    type: python
+    memory_framework: jax
+    script: "adapters/python/run_sigkerax.py"
+    extras:
+      - sigkerax
+    # Install the final Sigkerax release without its obsolete JAX <0.5 pin;
+    # the adapter supplies compatibility for the current locked JAX API.
+    compatibility_wheel:
+      url: "https://files.pythonhosted.org/packages/b7/30/f85c02264a9d38c00a98285f249530f5046a714c7a31e13a8b2cd142b778/sigkerax-0.2.1-py3-none-any.whl#sha256=3c9a567019247b5d783d8d2b0b9588efb4f5a64bd7a52bf277c1a9b9170daa2c"
+    backends:
+      - name: cpu
+        env:
+          JAX_PLATFORM_NAME: cpu
+          XLA_FLAGS: "--xla_cpu_multi_thread_eigen=true intra_op_parallelism_threads={cpu_count}"
+      - name: gpu
+        env:
+          JAX_PLATFORM_NAME: gpu
+    operations:
+      - signaturekernel
+      - signaturekernel_backprop
+
+  sigkernel:
+    type: python
+    memory_framework: torch
+    script: "adapters/python/run_sigkernel.py"
+    extras:
+      - sigkernel
+    # The upstream Cython CPU solver requires float64; keep the paper's
+    # float32 comparison on its CUDA implementation.
+    backend: gpu
+    env:
+      NUMBA_CUDA_DRIVER: "/usr/lib/wsl/lib/libcuda.so.1"
     operations:
       - signaturekernel
       - signaturekernel_backprop
@@ -152,6 +193,10 @@ libraries:
       - branchedsignature_planar
       - branchedsignature_nonplanar_backprop
       - branchedsignature_planar_backprop
+      - branchedlogsignature_nonplanar
+      - branchedlogsignature_planar
+      - branchedlogsignature_nonplanar_backprop
+      - branchedlogsignature_planar_backprop
 
   signax:
     type: python

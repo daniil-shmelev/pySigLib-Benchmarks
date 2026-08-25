@@ -58,6 +58,13 @@ polysigkernel = [
     "jax[cuda]",
     "polysigkernel",
 ]
+sigkerax = [
+    "jax[cuda]",
+]
+sigkernel = [
+    "sigkernel",
+    "torch>=2.9.1",
+]
 tensordev = [
     "jax[cuda]",
     "tensordev==0.0.2",
@@ -76,6 +83,7 @@ all = [
     "stochastax",
     "signax",
     "signatory",
+    "sigkernel",
     "tensordev==0.0.2",
     "keras_sig",
     "torch>=2.9.1",
@@ -91,13 +99,15 @@ signax = { git = "https://github.com/anh-tong/signax", rev = "4961f361b60d293f4e
 polysigkernel = { git = "https://github.com/luke-a-thompson/polysigkernel.git", rev = "807234d4ffc7e123cd3392b78e763c6a41269384" }
 signatory = { git = "https://github.com/datasig-ac-uk/signatory.git", rev = "f263b9d9358c81a144c9d9bb78006745136abbf8" }
 signature-py = { git = "https://github.com/ChosunOne/signature-rs.git", subdirectory = "signature-py", rev = "671b0fba16f1c542e76910c2825a9e8b185d3a93" }
+sigkernel = { git = "https://github.com/crispitagorico/sigkernel.git", rev = "40a583155ea8d2194af0e90dddab37e2659cfcfd" }
 
 [tool.uv.extra-build-dependencies]
 iisignature = ["numpy"]
 signatory = [{ requirement = "torch", match-runtime = true }]
+sigkernel = ["cython>=0.29"]
 
 [tool.uv]
-constraint-dependencies = ["pysiglib-cuda==4.0.0rc1"]
+constraint-dependencies = ["pysiglib-cuda==4.0.0rc1", "numba==0.65.1"]
 no-build-isolation-package = ["pathsig"]
 
 [[tool.uv.index]]

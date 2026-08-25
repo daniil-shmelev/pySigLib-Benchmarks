@@ -12,6 +12,8 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from adapters.python.run_polysigkernel import PolySigKernelAdapter
 from adapters.python.run_pysiglib import PySigLibAdapter
+from adapters.python.run_sigkerax import SigkeraxAdapter
+from adapters.python.run_sigkernel import SigkernelAdapter
 from common.paths import make_path
 
 
@@ -143,3 +145,120 @@ def test_pysiglib_signaturekernel_backprop_matches_standard_api():
     )
 
     np.testing.assert_allclose(got, np.asarray(expected), rtol=1e-5, atol=1e-5)
+
+
+def test_sigkerax_signaturekernel_matches_direct_api():
+    pytest.importorskip("jax")
+    pytest.importorskip("sigkerax")
+
+    config = _config("signaturekernel")
+    config["sig_kernel_refinement_factor"] = 1
+    adapter = SigkeraxAdapter(config)
+    path1 = _path_batch()
+    path2 = _path_batch() + 0.2
+
+    got = np.asarray(adapter.run_signaturekernel(path1, path2, 2, 2)())
+    X = adapter._path_batch(path1)
+    Y = adapter._path_batch(path2)
+    expected = np.asarray(adapter._signature_kernel().kernel_matrix(X, Y)[..., 0])
+
+    assert got.dtype == np.float32
+    assert got.shape == (2, 2)
+    np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_sigkerax_backprop_matches_direct_vjp():
+    pytest.importorskip("jax")
+    pytest.importorskip("sigkerax")
+
+    config = _config("signaturekernel_backprop")
+    config["sig_kernel_refinement_factor"] = 1
+    adapter = SigkeraxAdapter(config)
+    path1 = _path_batch()
+    path2 = _path_batch() + 0.2
+    got = np.asarray(
+        adapter.run_signaturekernel_backprop(path1, path2, 2, 2)()
+    )
+
+    X = adapter._path_batch(path1)
+    Y = adapter._path_batch(path2)
+    output, pullback = adapter.jax.vjp(
+        lambda X_arg: adapter._signature_kernel().kernel_matrix(
+            X_arg,
+            Y,
+        )[..., 0],
+        X,
+    )
+    cotangent = adapter.jnp.asarray(
+        adapter.random_cotangent(output.shape),
+        dtype=output.dtype,
+    )
+    expected = np.asarray(pullback(cotangent)[0])
+
+    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+
+def test_sigkernel_signaturekernel_matches_direct_api():
+    pytest.importorskip("sigkernel")
+
+    config = _config("signaturekernel")
+    config["sig_kernel_dyadic_order"] = 0
+    adapter = SigkernelAdapter(config)
+    path1 = _path_batch()
+    path2 = _path_batch() + 0.2
+
+    got = np.asarray(adapter.run_signaturekernel(path1, path2, 2, 2)())
+    X = adapter._path_tensor(path1)
+    Y = adapter._path_tensor(path2)
+    expected = np.asarray(
+        adapter._signature_kernel().compute_Gram(
+            X,
+            Y,
+            sym=False,
+            max_batch=2,
+        )
+    )
+
+    assert got.dtype == np.float64
+    assert got.shape == (2, 2)
+    np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_sigkernel_backprop_matches_direct_autograd():
+    pytest.importorskip("sigkernel")
+
+    config = _config("signaturekernel_backprop")
+    config["sig_kernel_dyadic_order"] = 0
+    adapter = SigkernelAdapter(config)
+    path1 = _path_batch()
+    path2 = _path_batch() + 0.2
+    got = np.asarray(
+        adapter.run_signaturekernel_backprop(path1, path2, 2, 2)()
+    )
+
+    X = adapter._path_tensor(path1, requires_grad=True)
+    Y = adapter._path_tensor(path2)
+    output = adapter._signature_kernel().compute_Gram(
+        X,
+        Y,
+        sym=False,
+        max_batch=2,
+    )
+    cotangent = adapter.torch.as_tensor(
+        adapter.random_cotangent(tuple(output.shape)),
+        dtype=output.dtype,
+        device=output.device,
+    )
+    expected = adapter.torch.autograd.grad(
+        output,
+        X,
+        cotangent,
+        retain_graph=True,
+    )[0]
+
+    np.testing.assert_allclose(
+        got,
+        expected.detach().cpu().numpy(),
+        rtol=1e-5,
+        atol=1e-5,
+    )
