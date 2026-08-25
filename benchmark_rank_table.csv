@@ -1,0 +1,16 @@
+Package,Signature CPU,Signature GPU,Signature BP CPU,Signature BP GPU,Log signature CPU,Log signature GPU,Log signature BP CPU,Log signature BP GPU,Branched sig. NP CPU,Branched sig. NP GPU,Branched sig. NP BP CPU,Branched sig. NP BP GPU,Branched sig. P CPU,Branched sig. P GPU,Branched sig. P BP CPU,Branched sig. P BP GPU,Branched log sig. NP CPU,Branched log sig. NP GPU,Branched log sig. NP BP CPU,Branched log sig. NP BP GPU,Branched log sig. P CPU,Branched log sig. P GPU,Branched log sig. P BP CPU,Branched log sig. P BP GPU,Signature kernel CPU,Signature kernel GPU,Signature kernel BP CPU,Signature kernel BP GPU,Overall CPU,Overall GPU
+chen-signatures,5,--,7,--,4,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,8,--
+iisignature,8,--,8,--,7,--,6,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,11,--
+keras_sig,7,2,6,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,9,3
+log-signatures-pytorch,9,--,--,--,6,3,5,4,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,10,7
+pathsig,--,4,--,2,--,1,--,2,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,6
+polysigkernel,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,3,4,--,--,6,8
+pysiglib,1,1,1,1,1,2,1,1,1,--,1,--,1,--,2,--,1,--,1,--,1,--,2,--,1,1,1,--,1,1
+RoughPy,10,--,--,--,9,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,13,--
+sigkerax,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,2,2,--,--,2,3
+sigkernel,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,3,--,1,--,3
+signatory,2,5,5,3,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,7,8
+signature-rs,--,--,--,--,8,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,12,--
+signax,3,7,3,4,2,5,3,5,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,3,10
+stochastax,6,3,4,--,5,4,4,3,2,1,2,1,2,1,1,1,2,1,2,1,2,1,1,1,--,--,--,--,3,2
+tensordev,4,6,2,5,3,6,2,6,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,--,3,11
