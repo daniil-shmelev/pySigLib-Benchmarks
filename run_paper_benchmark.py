@@ -12,6 +12,7 @@ if __name__ == "__main__":
             "paper_branched_signatures_sweep.yaml",
             "paper_branched_logsignatures_sweep.yaml",
             "paper_signature_kernel_sweep.yaml",
+            "paper_polynomial_signature_kernel_sweep.yaml",
         ),
         "paper_benchmark",
     )

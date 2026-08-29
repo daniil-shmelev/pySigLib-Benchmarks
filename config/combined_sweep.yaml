@@ -1,9 +1,23 @@
 # combined_sweep.yaml
-# Conservative all-operation sweep across every registered library.
+# Conservative all-operation sweep across finite-difference-compatible libraries.
 #
 # Signature kernels scale quadratically in both path length and batch size, so
 # this combined run uses the kernel sweep's smaller grid. Use benchmark_sweep.yaml
 # for the larger signature-only grid.
+
+libraries:
+    - iisignature
+    - signature-rs
+    - log-signatures-pytorch
+    - signatory
+    - pathsig
+    - pysiglib
+    - sigkerax
+    - sigkernel
+    - signax
+    - tensordev
+    - keras_sig
+    - chen-signatures
 
 path_kind: "brownian"
 seed: 20260529
@@ -39,18 +53,33 @@ repeats: 10
 
 logsig_method: "S"
 
-sig_kernel_solver: "monomial_approx"
+sig_kernel_method: "finite_difference"
 sig_kernel_max_batch: -1
 
 library_configs:
-    polysigkernel:
-        sig_kernel_order: 3
     sigkerax:
         sig_kernel_refinement_factor: 1
+        backend_configs:
+            cpu:
+                dtype: "float64"
+            gpu:
+                dtype: "float32"
     sigkernel:
         sig_kernel_dyadic_order: 0
         sig_kernel_max_batch: 4
+        backend_configs:
+            cpu:
+                dtype: "float64"
+            gpu:
+                dtype: "float32"
     pysiglib:
-        sig_kernel_dyadic_order: 1
+        sig_kernel_method: "finite_difference"
+        sig_kernel_dyadic_order: 0
+        sig_kernel_max_batch: 4
+        backend_configs:
+            cpu:
+                dtype: "float64"
+            gpu:
+                dtype: "float32"
 
 runs_dir: "runs"

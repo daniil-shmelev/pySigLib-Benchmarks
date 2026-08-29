@@ -116,14 +116,15 @@ def test_tensordev_signature_matches_direct_api():
     path = make_path(2, 4, "linear")
 
     got = adapter.run_signature(path, 2, 2)()
-    expected = tensordev.path_signature(adapter._path_array(path), trunc=2)
+    expected = tensordev.path_signature(adapter._path_array(path), trunc=2)[1:]
 
-    got_flat = np.asarray(tensordev.tensor_to_flat(got, start_at_level_one=True))
+    got_flat = np.asarray(tensordev.tensor_to_flat(got, start_at_level_one=False))
     expected_flat = np.asarray(
-        tensordev.tensor_to_flat(expected, start_at_level_one=True)
+        tensordev.tensor_to_flat(expected, start_at_level_one=False)
     )
 
     assert got_flat.dtype == np.float32
+    assert len(got) == 2
     assert got_flat.shape == expected_flat.shape
     np.testing.assert_allclose(got_flat, expected_flat, rtol=1e-6, atol=1e-6)
 

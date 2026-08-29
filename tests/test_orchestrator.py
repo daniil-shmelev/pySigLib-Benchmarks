@@ -288,7 +288,7 @@ def test_worker_memory_limit_kills_only_worker_and_reports_oom(monkeypatch):
     assert killed == [True]
 
 
-def test_sigkill_is_reported_as_worker_oom():
+def test_sigkill_without_oom_evidence_is_runtime_error():
     class FakeProcess:
         @staticmethod
         def poll():
@@ -299,7 +299,7 @@ def test_sigkill_is_reported_as_worker_oom():
     worker._output_queue = orchestrator.queue.Queue()
     worker._output_queue.put(None)
 
-    with pytest.raises(orchestrator.BenchmarkWorkerOOM, match="SIGKILL"):
+    with pytest.raises(RuntimeError, match="SIGKILL"):
         worker._read_response()
 
 
@@ -315,8 +315,91 @@ def test_cgroup_oom_diagnostic_is_reported_as_worker_oom():
     worker._output_queue = orchestrator.queue.Queue()
     worker._output_queue.put(None)
 
-    with pytest.raises(orchestrator.BenchmarkWorkerOOM, match="likely due to OOM"):
+    with pytest.raises(orchestrator.BenchmarkWorkerOOM, match="due to OOM"):
         worker._read_response()
+
+
+def test_oom_classification_requires_explicit_memory_evidence():
+    assert orchestrator.is_oom_failure(
+        "RuntimeError",
+        "zoom worker disconnected",
+    ) is False
+    assert orchestrator.is_oom_failure(
+        "RuntimeError",
+        "random kernel error",
+    ) is False
+    assert orchestrator.is_oom_failure(
+        "OutOfMemoryError",
+        "CUDA allocation failed",
+    ) is True
+    assert orchestrator.is_oom_failure(
+        "RuntimeError",
+        "CUDA error: out of memory",
+    ) is True
+
+
+def test_python_worker_classifies_adapter_oom_response(monkeypatch):
+    worker = orchestrator.PythonAdapterWorker("example", {})
+    worker.process = type(
+        "FakeProcess",
+        (),
+        {
+            "stdin": type(
+                "FakeStdin",
+                (),
+                {"write": lambda self, value: None, "flush": lambda self: None},
+            )(),
+        },
+    )()
+    worker.scope_key = "scope"
+    monkeypatch.setattr(worker, "_task_scope_key", lambda config: "scope")
+    monkeypatch.setattr(worker, "_start", lambda: None)
+    monkeypatch.setattr(
+        worker,
+        "_read_response",
+        lambda: {
+            "status": "error",
+            "error_type": "JaxRuntimeError",
+            "error": "RESOURCE_EXHAUSTED: Out of memory while allocating",
+            "traceback": "",
+        },
+    )
+
+    with pytest.raises(orchestrator.BenchmarkWorkerOOM, match="Out of memory"):
+        worker.run({"memory_sample_interval_seconds": 0.005})
+
+
+def test_python_worker_does_not_classify_random_adapter_error_as_oom(
+    monkeypatch,
+):
+    worker = orchestrator.PythonAdapterWorker("example", {})
+    worker.process = type(
+        "FakeProcess",
+        (),
+        {
+            "stdin": type(
+                "FakeStdin",
+                (),
+                {"write": lambda self, value: None, "flush": lambda self: None},
+            )(),
+        },
+    )()
+    worker.scope_key = "scope"
+    monkeypatch.setattr(worker, "_task_scope_key", lambda config: "scope")
+    monkeypatch.setattr(worker, "_start", lambda: None)
+    monkeypatch.setattr(
+        worker,
+        "_read_response",
+        lambda: {
+            "status": "error",
+            "error_type": "RuntimeError",
+            "error": "random kernel error",
+            "traceback": "",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="random kernel error"):
+        worker.run({"memory_sample_interval_seconds": 0.005})
 
 
 def test_cgroup_worker_forwards_changed_environment(monkeypatch):

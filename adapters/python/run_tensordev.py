@@ -43,7 +43,7 @@ class TensorDevAdapter(BenchmarkAdapter):
         path_jax = self._path_array(path)
 
         def signature_fn(path_arg):
-            return self.tensordev.path_signature(path_arg, trunc=m)
+            return self.tensordev.path_signature(path_arg, trunc=m)[1:]
 
         signature_fn = self.jax.jit(signature_fn)
 

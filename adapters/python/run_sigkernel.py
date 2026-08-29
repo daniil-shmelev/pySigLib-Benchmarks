@@ -27,6 +27,16 @@ class SigkernelAdapter(BenchmarkAdapter):
 
         self.sigkernel = sigkernel
         self.torch = torch
+        default_dtype = "float32" if self.backend == "gpu" else "float64"
+        self.dtype_name = str(config.get("dtype", default_dtype))
+        if self.dtype_name == "float32":
+            self.numpy_dtype = np.float32
+            self.torch_dtype = torch.float32
+        elif self.dtype_name == "float64":
+            self.numpy_dtype = np.float64
+            self.torch_dtype = torch.float64
+        else:
+            raise ValueError(f"Unsupported dtype: {self.dtype_name}")
         self.dyadic_order = int(config.get("sig_kernel_dyadic_order", 0))
         self.configured_max_batch = int(
             config.get("sig_kernel_max_batch", -1)
@@ -44,19 +54,15 @@ class SigkernelAdapter(BenchmarkAdapter):
             device = "cuda"
         else:
             device = "cpu"
-        dtype = (
-            self.torch.float32
-            if device == "cuda"
-            else self.torch.float64
+        namespace = (
+            f"sigkernel.{device}.{self.dtype_name}.grad={requires_grad}"
         )
-        numpy_dtype = np.float32 if device == "cuda" else np.float64
-        namespace = f"sigkernel.{device}.grad={requires_grad}"
         return self.cached_prepared_input(
             namespace,
             path,
             lambda: self.torch.as_tensor(
-                np.ascontiguousarray(path, dtype=numpy_dtype),
-                dtype=dtype,
+                np.ascontiguousarray(path, dtype=self.numpy_dtype),
+                dtype=self.torch_dtype,
                 device=device,
             ).requires_grad_(requires_grad),
         )
@@ -110,27 +116,24 @@ class SigkernelAdapter(BenchmarkAdapter):
         X = self._path_tensor(path1, requires_grad=True)
         Y = self._path_tensor(path2)
         signature_kernel = self._signature_kernel()
+        max_batch = self._max_batch(X, Y)
         output = signature_kernel.compute_Gram(
             X,
             Y,
             sym=False,
-            max_batch=self._max_batch(X, Y),
+            max_batch=max_batch,
         )
         self._synchronize(output)
         cotangent = self.torch.as_tensor(
             self.random_cotangent(tuple(output.shape)),
-            dtype=output.dtype,
-            device=output.device,
+            dtype=X.dtype,
+            device=X.device,
         )
 
         def gradient():
-            result = self.torch.autograd.grad(
-                output,
-                X,
-                cotangent,
-                retain_graph=True,
-            )[0]
-            return self._synchronize(result)
+            X.grad = None
+            output.backward(cotangent, retain_graph=True)
+            return self._synchronize(X.grad)
 
         return gradient
 
@@ -150,7 +153,7 @@ class SigkernelAdapter(BenchmarkAdapter):
                 self.d,
                 self.m,
             )
-            method_prefix = "autograd(SigKernel.compute_Gram)"
+            method_prefix = "backward(SigKernel.compute_Gram)"
         else:
             kernel = self.run_signaturekernel(
                 path1,
@@ -159,7 +162,6 @@ class SigkernelAdapter(BenchmarkAdapter):
                 self.m,
             )
             method_prefix = "SigKernel.compute_Gram"
-
         t_ms, alloc_bytes, samples_ms = self.manual_timing_loop(kernel)
         return self.output_result(
             t_ms=t_ms,
@@ -167,7 +169,8 @@ class SigkernelAdapter(BenchmarkAdapter):
             samples_ms=samples_ms,
             library="sigkernel",
             method=(
-                f"{method_prefix}(dyadic_order={self.dyadic_order},linear)"
+                f"{method_prefix}(dyadic_order={self.dyadic_order},linear,"
+                f"dtype={self.dtype_name})"
             ),
             path_type="torch.Tensor",
             language="python",

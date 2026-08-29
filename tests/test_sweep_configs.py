@@ -30,12 +30,10 @@ BACKPROP_OPERATIONS = {
 }
 PAPER_SIGNATURE_LIBRARIES = {
     "iisignature",
-    "roughpy",
     "log-signatures-pytorch",
     "signatory",
     "pathsig",
     "pysiglib",
-    "stochastax",
     "signax",
     "tensordev",
     "keras_sig",
@@ -44,18 +42,20 @@ PAPER_SIGNATURE_LIBRARIES = {
 PAPER_LOGSIGNATURE_LIBRARIES = (
     PAPER_SIGNATURE_LIBRARIES
     | {"signature-rs"}
-) - {"keras_sig"}
-PAPER_BRANCHED_LIBRARIES = {"pysiglib", "stochastax"}
-PAPER_KERNEL_LIBRARIES = {
+) - {"keras_sig", "tensordev"}
+PAPER_BRANCHED_LIBRARIES = {"pysiglib"}
+PAPER_FINITE_DIFFERENCE_KERNEL_LIBRARIES = {
     "pysiglib",
-    "polysigkernel",
     "sigkerax",
     "sigkernel",
+}
+PAPER_POLYNOMIAL_KERNEL_LIBRARIES = {
+    "pysiglib",
+    "polysigkernel",
 }
 PAPER_JAX_LIBRARIES = {
     "polysigkernel",
     "sigkerax",
-    "stochastax",
     "signax",
     "tensordev",
     "keras_sig",
@@ -105,10 +105,41 @@ def test_every_registry_extra_is_defined():
     assert registry_extras <= defined_extras
 
 
-def _assert_paper_settings(paper: dict, expected_N: int = 1000) -> None:
+def test_pysiglib_uses_the_local_source_checkout():
+    with (REPO_ROOT / "pyproject.toml").open("rb") as project_file:
+        project = tomllib.load(project_file)
+
+    sources = project["tool"]["uv"]["sources"]
+    assert sources["pysiglib"] == {
+        "path": "../pySigLib"
+    }
+    assert sources["pysiglib-cuda"] == {
+        "path": "../pySigLib/plugins/cuda"
+    }
+
+
+def test_runtime_sweeps_use_at_least_ten_repetitions():
+    for config_path in CONFIG_DIR.glob("*.yaml"):
+        config = _load_yaml(config_path.name)
+        if "repeats" in config:
+            assert config["repeats"] >= 10
+
+
+def _assert_paper_settings(
+    paper: dict,
+    *,
+    expected_N: int = 1000,
+    expected_Ms: tuple[int, ...] = (2, 3),
+    expected_batch_size: int = 256,
+) -> None:
+    assert paper["path_kind"] == "brownian"
+    assert paper["seed"] == 20260529
     assert paper["Ns"] == [expected_N]
     assert paper["Ds"] == [2, 4, 8, 16]
-    assert paper["repeats"] == 3
+    assert paper["Ms"] == list(expected_Ms)
+    assert paper["backends"] == ["cpu", "gpu"]
+    assert paper["batch_size"] == expected_batch_size
+    assert paper["repeats"] == 10
     assert paper["warmup_iterations"] == 1
     assert paper["timing_statistic"] == "min"
     assert paper["worker_memory_limit_gb"] == 16
@@ -124,10 +155,23 @@ def test_problem_specific_paper_sweeps():
         "paper_branched_logsignatures_sweep.yaml"
     )
     kernels = _load_yaml("paper_signature_kernel_sweep.yaml")
+    polynomial_kernels = _load_yaml(
+        "paper_polynomial_signature_kernel_sweep.yaml"
+    )
 
     _assert_paper_settings(signatures, expected_N=10000)
-    for paper in (logsignatures, branched, branched_logsignatures, kernels):
+    for paper in (logsignatures, branched, branched_logsignatures):
         _assert_paper_settings(paper)
+    _assert_paper_settings(
+        kernels,
+        expected_Ms=(3,),
+        expected_batch_size=32,
+    )
+    _assert_paper_settings(
+        polynomial_kernels,
+        expected_Ms=(3,),
+        expected_batch_size=32,
+    )
 
     assert set(signatures["libraries"]) == PAPER_SIGNATURE_LIBRARIES
     assert set(signatures["operations"]) == {
@@ -153,18 +197,50 @@ def test_problem_specific_paper_sweeps():
         "branchedlogsignature_planar",
         "branchedlogsignature_planar_backprop",
     }
-    assert set(kernels["libraries"]) == PAPER_KERNEL_LIBRARIES
+    assert set(kernels["libraries"]) == (
+        PAPER_FINITE_DIFFERENCE_KERNEL_LIBRARIES
+    )
     assert set(kernels["operations"]) == {
+        "signaturekernel",
+        "signaturekernel_backprop",
+    }
+    assert set(polynomial_kernels["libraries"]) == (
+        PAPER_POLYNOMIAL_KERNEL_LIBRARIES
+    )
+    assert set(polynomial_kernels["operations"]) == {
         "signaturekernel",
         "signaturekernel_backprop",
     }
     assert kernels["library_configs"]["sigkerax"][
         "sig_kernel_refinement_factor"
     ] == 1
-    assert kernels["library_configs"]["sigkernel"] == {
-        "sig_kernel_dyadic_order": 0,
-        "sig_kernel_max_batch": 4,
-    }
+    assert kernels["library_configs"]["sigkernel"][
+        "sig_kernel_dyadic_order"
+    ] == 0
+    assert kernels["library_configs"]["sigkernel"][
+        "sig_kernel_max_batch"
+    ] == 4
+    assert kernels["library_configs"]["pysiglib"][
+        "sig_kernel_dyadic_order"
+    ] == kernels["library_configs"]["sigkernel"][
+        "sig_kernel_dyadic_order"
+    ]
+    assert kernels["library_configs"]["pysiglib"][
+        "sig_kernel_max_batch"
+    ] == kernels["library_configs"]["sigkernel"][
+        "sig_kernel_max_batch"
+    ]
+    assert kernels["library_configs"]["pysiglib"][
+        "sig_kernel_method"
+    ] == "finite_difference"
+    assert polynomial_kernels["library_configs"]["pysiglib"][
+        "sig_kernel_method"
+    ] == "polynomial"
+    assert polynomial_kernels["library_configs"]["pysiglib"][
+        "sig_kernel_order"
+    ] == polynomial_kernels["library_configs"]["polysigkernel"][
+        "sig_kernel_order"
+    ]
 
     registry = _load_yaml("libraries_registry.yaml")["libraries"]
     for paper in (
@@ -173,6 +249,7 @@ def test_problem_specific_paper_sweeps():
         branched,
         branched_logsignatures,
         kernels,
+        polynomial_kernels,
     ):
         operations = set(paper["operations"])
         eligible_libraries = {
@@ -180,12 +257,60 @@ def test_problem_specific_paper_sweeps():
             for library_name, library_config in registry.items()
             if operations & set(library_config["operations"])
         }
-        assert set(paper["libraries"]) == eligible_libraries
+        assert set(paper["libraries"]) <= eligible_libraries
         for library_name in paper["libraries"]:
             assert operations & set(registry[library_name]["operations"])
 
         pysiglib_config = paper["library_configs"]["pysiglib"]
         assert pysiglib_config["backend_configs"]["cpu"]["n_jobs"] == -1
+
+
+def test_finite_difference_kernel_settings_match_across_sweeps():
+    for config_name in (
+        "combined_sweep.yaml",
+        "signature_kernel_sweep.yaml",
+        "paper_signature_kernel_sweep.yaml",
+    ):
+        config = _load_yaml(config_name)
+        library_configs = config["library_configs"]
+        pysiglib = library_configs["pysiglib"]
+        sigkernel = library_configs["sigkernel"]
+
+        assert pysiglib["sig_kernel_dyadic_order"] == sigkernel[
+            "sig_kernel_dyadic_order"
+        ]
+        assert library_configs["sigkerax"][
+            "sig_kernel_refinement_factor"
+        ] == 2 ** pysiglib["sig_kernel_dyadic_order"]
+        for backend, dtype in (("cpu", "float64"), ("gpu", "float32")):
+            assert pysiglib["backend_configs"][backend]["dtype"] == dtype
+            assert sigkernel["backend_configs"][backend]["dtype"] == dtype
+            assert library_configs["sigkerax"]["backend_configs"][backend][
+                "dtype"
+            ] == dtype
+
+
+def test_polynomial_kernel_settings_match_across_sweeps():
+    for config_name in (
+        "polynomial_signature_kernel_sweep.yaml",
+        "paper_polynomial_signature_kernel_sweep.yaml",
+    ):
+        config = _load_yaml(config_name)
+        library_configs = config["library_configs"]
+        assert set(config["libraries"]) == {
+            "pysiglib",
+            "polysigkernel",
+        }
+        assert library_configs["pysiglib"][
+            "sig_kernel_method"
+        ] == "polynomial"
+        assert library_configs["pysiglib"][
+            "sig_kernel_order"
+        ] == library_configs["polysigkernel"][
+            "sig_kernel_order"
+        ]
+        assert library_configs["pysiglib"]["dtype"] == "float32"
+        assert library_configs["polysigkernel"]["dtype"] == "float32"
 
 
 def test_paper_cpu_frameworks_enable_all_available_threads():

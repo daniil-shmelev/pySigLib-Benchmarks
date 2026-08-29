@@ -25,27 +25,85 @@ class PySigLibAdapter(BenchmarkAdapter):
 
         self.pysiglib = pysiglib
         self.torch = torch
+        self.dtype_name = str(config.get("dtype", "float32"))
+        if self.dtype_name == "float32":
+            self.numpy_dtype = np.float32
+            self.torch_dtype = torch.float32
+        elif self.dtype_name == "float64":
+            self.numpy_dtype = np.float64
+            self.torch_dtype = torch.float64
+        else:
+            raise ValueError(f"Unsupported dtype: {self.dtype_name}")
         self.log_sig_from_path_backprop = _log_sig_from_path_backprop
         self.log_sig_method = int(config.get("log_sig_method", 2))
+        configured_branched_method = config.get("branched_log_sig_method")
+        self.configured_branched_log_sig_method = (
+            None
+            if configured_branched_method is None
+            else int(configured_branched_method)
+        )
         self.n_jobs = int(config.get("n_jobs", 1))
+
+    def _device_name(self) -> str:
+        if self.backend == "gpu":
+            return "cuda"
+        if self.backend == "cpu":
+            return "cpu"
+        return "both"
+
+    def _branched_log_sig_method(self, planar: bool) -> int:
+        if self.configured_branched_log_sig_method is not None:
+            return self.configured_branched_log_sig_method
+        return 1 if planar else 0
+
+    def _signature_kernel_parameters(
+        self,
+        m: int,
+    ) -> tuple[str, Dict[str, Any]]:
+        method = str(
+            self.config.get("sig_kernel_method", "finite_difference")
+        )
+        if method == "finite_difference":
+            return method, {
+                "method": method,
+                "dyadic_order": int(
+                    self.config.get("sig_kernel_dyadic_order", m)
+                ),
+            }
+        if method == "polynomial":
+            return method, {
+                "method": method,
+                "order": int(self.config.get("sig_kernel_order", m)),
+            }
+        raise ValueError(f"Unknown signature-kernel method: {method}")
+
+    def _signature_kernel_method_label(self, prefix: str, m: int) -> str:
+        method, parameters = self._signature_kernel_parameters(m)
+        if method == "finite_difference":
+            parameter = f"dyadic_order={parameters['dyadic_order']}"
+        else:
+            parameter = f"order={parameters['order']}"
+        return (
+            f"{prefix}(method={method},{parameter},dtype={self.dtype_name})"
+        )
 
     def _path_array(self, path: np.ndarray):
         """Prepare the standard API input array outside the timed region."""
         if self.backend == "gpu":
             return self.cached_prepared_input(
-                "pysiglib.standard.gpu",
+                f"pysiglib.standard.gpu.{self.dtype_name}",
                 path,
                 lambda: self.torch.as_tensor(
-                    np.ascontiguousarray(path, dtype=np.float32),
-                    dtype=self.torch.float32,
+                    np.ascontiguousarray(path, dtype=self.numpy_dtype),
+                    dtype=self.torch_dtype,
                     device="cuda",
                 ),
             )
 
         return self.cached_prepared_input(
-            "pysiglib.standard.cpu",
+            f"pysiglib.standard.cpu.{self.dtype_name}",
             path,
-            lambda: np.ascontiguousarray(path, dtype=np.float32),
+            lambda: np.ascontiguousarray(path, dtype=self.numpy_dtype),
         )
 
     def _cotangent(self, output):
@@ -88,17 +146,12 @@ class PySigLibAdapter(BenchmarkAdapter):
         Returns a closure that performs only the kernel (no setup).
         """
         path = self._path_array(path)
-        if self.log_sig_method in (1, 2):
-            device = (
-                "cuda" if self.backend == "gpu"
-                else "cpu" if self.backend == "cpu"
-                else "both"
-            )
+        if self.log_sig_method in (1, 2, 3):
             self.pysiglib.prepare_log_sig(
                 d,
                 m,
                 method=self.log_sig_method,
-                device=device,
+                device=self._device_name(),
             )
         log_sig_method = self.log_sig_method
         use_scalar_term = log_sig_method in (1, 2)
@@ -146,17 +199,12 @@ class PySigLibAdapter(BenchmarkAdapter):
         self, path: np.ndarray, d: int, m: int
     ) -> Optional[Callable]:
         path = self._path_array(path)
-        if self.log_sig_method in (1, 2):
-            device = (
-                "cuda" if self.backend == "gpu"
-                else "cpu" if self.backend == "cpu"
-                else "both"
-            )
+        if self.log_sig_method in (1, 2, 3):
             self.pysiglib.prepare_log_sig(
                 d,
                 m,
                 method=self.log_sig_method,
-                device=device,
+                device=self._device_name(),
             )
         log_sig_method = self.log_sig_method
         if log_sig_method == 3:
@@ -323,12 +371,20 @@ class PySigLibAdapter(BenchmarkAdapter):
             )
 
         path = self._path_array(path)
-        self.pysiglib.prepare_branched_sig(d, m, planar=planar)
+        method = self._branched_log_sig_method(planar)
+        self.pysiglib.prepare_branched_log_sig(
+            d,
+            m,
+            method=method,
+            planar=planar,
+            device=self._device_name(),
+        )
 
         def branchedlogsignature_fn():
             result = self.pysiglib.branched_log_sig(
                 path,
                 degree=m,
+                method=method,
                 planar=planar,
                 n_jobs=self.n_jobs,
             )
@@ -358,7 +414,14 @@ class PySigLibAdapter(BenchmarkAdapter):
             )
 
         path = self._path_array(path)
-        self.pysiglib.prepare_branched_sig(d, m, planar=planar)
+        method = self._branched_log_sig_method(planar)
+        self.pysiglib.prepare_branched_log_sig(
+            d,
+            m,
+            method=method,
+            planar=planar,
+            device=self._device_name(),
+        )
         branched_signature = self.pysiglib.branched_sig(
             path,
             degree=m,
@@ -369,6 +432,7 @@ class PySigLibAdapter(BenchmarkAdapter):
             branched_signature,
             d,
             m,
+            method=method,
             planar=planar,
             n_jobs=self.n_jobs,
         )
@@ -382,6 +446,7 @@ class PySigLibAdapter(BenchmarkAdapter):
                     cotangent,
                     d,
                     m,
+                    method=method,
                     planar=planar,
                     n_jobs=self.n_jobs,
                 )
@@ -412,14 +477,14 @@ class PySigLibAdapter(BenchmarkAdapter):
         """
         path1 = self._path_array(path1)
         path2 = self._path_array(path2)
-        dyadic_order = int(self.config.get("sig_kernel_dyadic_order", m))
+        _, kernel_parameters = self._signature_kernel_parameters(m)
         max_batch = int(self.config.get("sig_kernel_max_batch", -1))
 
         def signaturekernel_fn():
             result = self.pysiglib.sig_kernel_gram(
                 path1,
                 path2,
-                dyadic_order=dyadic_order,
+                **kernel_parameters,
                 static_kernel=None,
                 time_aug=False,
                 n_jobs=self.n_jobs,
@@ -438,19 +503,26 @@ class PySigLibAdapter(BenchmarkAdapter):
     ) -> Optional[Callable]:
         path1 = self._path_array(path1)
         path2 = self._path_array(path2)
-        dyadic_order = int(self.config.get("sig_kernel_dyadic_order", m))
+        method, kernel_parameters = self._signature_kernel_parameters(m)
         max_batch = int(self.config.get("sig_kernel_max_batch", -1))
 
-        output = self.pysiglib.sig_kernel_gram(
+        forward_result = self.pysiglib.sig_kernel_gram(
             path1,
             path2,
-            dyadic_order=dyadic_order,
+            **kernel_parameters,
             static_kernel=None,
             time_aug=False,
             n_jobs=self.n_jobs,
+            return_grid=method == "finite_difference",
             max_batch=max_batch,
         )
-        self._synchronize(output)
+        self._synchronize(forward_result)
+        if method == "finite_difference":
+            k_grid = forward_result
+            output = k_grid[..., -1, -1]
+        else:
+            k_grid = None
+            output = forward_result
         cotangent = self._cotangent(output)
 
         def backprop_fn():
@@ -458,12 +530,14 @@ class PySigLibAdapter(BenchmarkAdapter):
                 cotangent,
                 path1,
                 path2,
-                dyadic_order=dyadic_order,
+                **kernel_parameters,
                 static_kernel=None,
                 time_aug=False,
                 left_deriv=True,
                 right_deriv=False,
+                k_grid=k_grid,
                 n_jobs=self.n_jobs,
+                return_grid=False,
                 max_batch=max_batch,
             )
             return self._synchronize(result)
@@ -547,8 +621,10 @@ class PySigLibAdapter(BenchmarkAdapter):
             path2 = self.make_path_input()
             kernel = self.run_signaturekernel(path, path2, self.d, self.m)
             method = (
-                "sig_kernel_gram"
-                f"(dyadic_order={int(self.config.get('sig_kernel_dyadic_order', self.m))})"
+                self._signature_kernel_method_label(
+                    "sig_kernel_gram",
+                    self.m,
+                )
             )
         elif self.operation == "signaturekernel_backprop":
             path2 = self.make_path_input()
@@ -559,8 +635,10 @@ class PySigLibAdapter(BenchmarkAdapter):
                 self.m,
             )
             method = (
-                "sig_kernel_gram_backprop"
-                f"(dyadic_order={int(self.config.get('sig_kernel_dyadic_order', self.m))})"
+                self._signature_kernel_method_label(
+                    "sig_kernel_gram_backprop",
+                    self.m,
+                )
             )
         else:
             # Operation not supported

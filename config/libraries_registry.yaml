@@ -14,16 +14,6 @@ libraries:
       - sig_backprop
       - logsignature_backprop
 
-  roughpy:
-    type: python
-    script: "adapters/python/run_roughpy.py"
-    extras:
-      - roughpy
-    backend: cpu
-    operations:
-      - signature
-      - logsignature
-
   signature-rs:
     type: python
     script: "adapters/python/run_signature_rs.py"
@@ -161,42 +151,14 @@ libraries:
     script: "adapters/python/run_sigkernel.py"
     extras:
       - sigkernel
-    # The upstream Cython CPU solver requires float64; keep the paper's
-    # float32 comparison on its CUDA implementation.
-    backend: gpu
-    env:
-      NUMBA_CUDA_DRIVER: "/usr/lib/wsl/lib/libcuda.so.1"
+    backends:
+      - name: cpu
+      - name: gpu
+        env:
+          NUMBA_CUDA_DRIVER: "/usr/lib/wsl/lib/libcuda.so.1"
     operations:
       - signaturekernel
       - signaturekernel_backprop
-
-  stochastax:
-    type: python
-    memory_framework: jax
-    script: "adapters/python/run_stochastax.py"
-    extras:
-      - stochastax
-    backends:
-      - name: cpu
-        env:
-          JAX_PLATFORM_NAME: cpu
-          XLA_FLAGS: "--xla_cpu_multi_thread_eigen=true intra_op_parallelism_threads={cpu_count}"
-      - name: gpu
-        env:
-          JAX_PLATFORM_NAME: gpu
-    operations:
-      - signature
-      - logsignature
-      - sig_backprop
-      - logsignature_backprop
-      - branchedsignature_nonplanar
-      - branchedsignature_planar
-      - branchedsignature_nonplanar_backprop
-      - branchedsignature_planar_backprop
-      - branchedlogsignature_nonplanar
-      - branchedlogsignature_planar
-      - branchedlogsignature_nonplanar_backprop
-      - branchedlogsignature_planar_backprop
 
   signax:
     type: python

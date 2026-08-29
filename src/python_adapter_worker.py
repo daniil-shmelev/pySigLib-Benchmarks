@@ -85,6 +85,7 @@ def main() -> int:
         except Exception as error:
             send_response({
                 "status": "error",
+                "error_type": type(error).__name__,
                 "error": str(error),
                 "traceback": traceback.format_exc(),
                 "memory_metrics": (

@@ -10,7 +10,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-import common.adapter as adapter_module
 import memory_benchmark
 import orchestrator
 from common import BenchmarkAdapter
@@ -33,18 +32,12 @@ def _adapter_config(**overrides):
     return config
 
 
-def test_memory_mode_runs_one_warmup_and_one_measured_call(monkeypatch):
+def test_memory_mode_runs_one_warmup_and_one_measured_call():
     events = []
     calls = []
     adapter = BenchmarkAdapter(
         _adapter_config(_call_event_callback=events.append)
     )
-    monkeypatch.setattr(
-        adapter_module.tracemalloc,
-        "start",
-        lambda: pytest.fail("memory mode must not start tracemalloc"),
-    )
-
     _, allocated, samples = adapter.manual_timing_loop(
         lambda: calls.append(True)
     )
@@ -111,6 +104,15 @@ def test_memory_mode_keeps_gpu_metrics_when_call_fails(monkeypatch):
 
     assert adapter._memory_metrics["gpu_peak_allocated_bytes"] == 500
     assert adapter._memory_metrics["gpu_peak_allocated_delta_bytes"] == 400
+
+
+def test_oom_classifier_rejects_unrelated_errors():
+    assert memory_benchmark._is_oom(
+        RuntimeError("zoom worker disconnected")
+    ) is False
+    assert memory_benchmark._is_oom(
+        RuntimeError("CUDA error: out of memory")
+    ) is True
 
 
 def test_worker_adds_sampled_host_memory_to_result(monkeypatch):

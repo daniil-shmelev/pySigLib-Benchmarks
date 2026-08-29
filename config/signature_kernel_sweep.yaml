@@ -1,5 +1,10 @@
 # signature_kernel_sweep.yaml
-# Complete pairwise signature-kernel sweep across all registered libraries.
+# Finite-difference signature-kernel sweep.
+
+libraries:
+    - pysiglib
+    - sigkerax
+    - sigkernel
 
 path_kind: "brownian"
 seed: 20260529
@@ -28,22 +33,36 @@ batch_size: 32
 
 repeats: 10
 
-# polysigkernel options
-sig_kernel_solver: "monomial_approx"
+sig_kernel_method: "finite_difference"
 sig_kernel_max_batch: -1
 
 # Per-library native accuracy controls.
-# polysigkernel: order is the monomial expansion order.
 # pySigLib: dyadic_order refines the PDE grid by 2^dyadic_order.
 library_configs:
-    polysigkernel:
-        sig_kernel_order: 3
     sigkerax:
         sig_kernel_refinement_factor: 1
+        backend_configs:
+            cpu:
+                dtype: "float64"
+            gpu:
+                dtype: "float32"
     sigkernel:
         sig_kernel_dyadic_order: 0
         sig_kernel_max_batch: 4
+        backend_configs:
+            cpu:
+                dtype: "float64"
+            gpu:
+                dtype: "float32"
     pysiglib:
-        sig_kernel_dyadic_order: 1
+        sig_kernel_method: "finite_difference"
+        sig_kernel_dyadic_order: 0
+        sig_kernel_max_batch: 4
+        backend_configs:
+            cpu:
+                dtype: "float64"
+                n_jobs: -1
+            gpu:
+                dtype: "float32"
 
 runs_dir: "runs"

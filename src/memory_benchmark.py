@@ -13,13 +13,13 @@ from tqdm import tqdm
 
 from orchestrator import (
     REPO_ROOT,
-    BenchmarkWorkerOOM,
     PythonAdapterWorker,
     backend_variants,
     build_sweep_cases,
     build_task_config,
     discard_uncommitted_rows,
     format_task_label,
+    is_oom_failure,
     load_completed_tasks,
     load_yaml,
     make_task_id,
@@ -119,12 +119,7 @@ def _task_identity(
 
 
 def _is_oom(error: Exception) -> bool:
-    error_text = f"{type(error).__name__} {error}".lower()
-    return (
-        isinstance(error, (BenchmarkWorkerOOM, MemoryError))
-        or "out of memory" in error_text
-        or "oom" in error_text
-    )
+    return is_oom_failure(type(error).__name__, str(error))
 
 
 def _selected_libraries(

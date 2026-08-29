@@ -91,6 +91,24 @@ ADAPTIVE_BLOCK_FIELDS = [
 UNSUPPORTED_ERROR_MARKERS = (
     "CUDA branched sig: num_trees > 1024 not supported",
 )
+OOM_ERROR_TYPES = {
+    "benchmarkworkeroom",
+    "memoryerror",
+    "outofmemoryerror",
+}
+OOM_ERROR_MARKERS = (
+    "out of memory",
+    "oom-kill",
+    "oom_kill",
+    "cudaerrormemoryallocation",
+    "cublas_status_alloc_failed",
+    "resource exhausted",
+    "resource_exhausted",
+    "failed to allocate memory",
+    "cannot allocate memory",
+    "can't allocate memory",
+    "std::bad_alloc",
+)
 
 
 class BenchmarkCallTimeout(TimeoutError):
@@ -98,7 +116,17 @@ class BenchmarkCallTimeout(TimeoutError):
 
 
 class BenchmarkWorkerOOM(MemoryError):
-    """A benchmark worker exceeded its memory limit or received SIGKILL."""
+    """A benchmark worker exceeded its memory limit."""
+
+
+def is_oom_failure(error_type: str, reason: str) -> bool:
+    """Return whether a failure contains explicit memory exhaustion evidence."""
+    normalized_type = error_type.strip().lower()
+    error_text = f"{error_type} {reason}".lower()
+    return (
+        normalized_type in OOM_ERROR_TYPES
+        or any(marker in error_text for marker in OOM_ERROR_MARKERS)
+    )
 
 
 def load_yaml(path: Path) -> Dict[str, Any]:
@@ -676,13 +704,18 @@ class PythonAdapterWorker:
                 self._sample_host_memory()
                 return_code = self.process.poll()
                 details = "\n".join(self.diagnostics[-20:])
-                if (
-                    return_code in (-WORKER_SIGKILL, 128 + WORKER_SIGKILL)
-                    or "oom-kill" in details.lower()
-                ):
+                if is_oom_failure("", details):
                     self._record_memory_limit_peak()
                     raise BenchmarkWorkerOOM(
-                        f"{self.library_name}: worker received SIGKILL, likely due to OOM"
+                        f"{self.library_name}: worker failed due to OOM"
+                        + (f"\n{details}" if details else "")
+                    )
+                if return_code in (
+                    -WORKER_SIGKILL,
+                    128 + WORKER_SIGKILL,
+                ):
+                    raise RuntimeError(
+                        f"{self.library_name}: worker received SIGKILL"
                         + (f"\n{details}" if details else "")
                     )
                 raise RuntimeError(
@@ -1035,11 +1068,15 @@ class PythonAdapterWorker:
         memory_metrics = response.get("memory_metrics")
         if isinstance(memory_metrics, dict):
             self._memory_metrics.update(memory_metrics)
-        raise RuntimeError(
+        error_type = str(response.get("error_type", ""))
+        error_details = (
             f"{self.library_name}: adapter task failed: "
             f"{response.get('error', response)}\n"
             f"{response.get('traceback', '')}"
         )
+        if is_oom_failure(error_type, error_details):
+            raise BenchmarkWorkerOOM(error_details)
+        raise RuntimeError(error_details)
 
     def close(self) -> None:
         if self.process is None:

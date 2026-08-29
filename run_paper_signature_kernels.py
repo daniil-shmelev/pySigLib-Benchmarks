@@ -6,6 +6,9 @@ from paper_runner import run_paper_sweeps
 
 if __name__ == "__main__":
     run_paper_sweeps(
-        ("paper_signature_kernel_sweep.yaml",),
+        (
+            "paper_signature_kernel_sweep.yaml",
+            "paper_polynomial_signature_kernel_sweep.yaml",
+        ),
         "paper_signature_kernels",
     )

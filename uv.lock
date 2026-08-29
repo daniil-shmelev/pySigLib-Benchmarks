@@ -9,7 +9,7 @@ resolution-markers = [
 [manifest]
 constraints = [
     { name = "numba", specifier = "==0.65.1" },
-    { name = "pysiglib-cuda", specifier = "==4.0.0rc1" },
+    { name = "pysiglib-cuda", directory = "../pySigLib/plugins/cuda" },
 ]
 
 [[package]]
@@ -105,7 +105,7 @@ name = "cuda-bindings"
 version = "13.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-pathfinder" },
+    { name = "cuda-pathfinder", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/52/c8/b2589d68acf7e3d63e2be330b84bc25712e97ed799affbca7edd7eae25d6/cuda_bindings-13.2.0-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e865447abfb83d6a98ad5130ed3c70b1fc295ae3eeee39fd07b4ddb0671b6788", size = 5722404, upload-time = "2026-03-11T00:12:44.041Z" },
@@ -130,34 +130,34 @@ wheels = [
 
 [package.optional-dependencies]
 cudart = [
-    { name = "nvidia-cuda-runtime" },
+    { name = "nvidia-cuda-runtime", marker = "sys_platform == 'linux'" },
 ]
 cufft = [
-    { name = "nvidia-cufft" },
+    { name = "nvidia-cufft", marker = "sys_platform == 'linux'" },
 ]
 cufile = [
-    { name = "nvidia-cufile" },
+    { name = "nvidia-cufile", marker = "sys_platform == 'linux'" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti" },
+    { name = "nvidia-cuda-cupti", marker = "sys_platform == 'linux'" },
 ]
 curand = [
-    { name = "nvidia-curand" },
+    { name = "nvidia-curand", marker = "sys_platform == 'linux'" },
 ]
 cusolver = [
-    { name = "nvidia-cusolver" },
+    { name = "nvidia-cusolver", marker = "sys_platform == 'linux'" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse" },
+    { name = "nvidia-cusparse", marker = "sys_platform == 'linux'" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink" },
+    { name = "nvidia-nvjitlink", marker = "sys_platform == 'linux'" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc" },
+    { name = "nvidia-cuda-nvrtc", marker = "sys_platform == 'linux'" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx" },
+    { name = "nvidia-nvtx", marker = "sys_platform == 'linux'" },
 ]
 
 [[package]]
@@ -189,24 +189,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e2/48/27c948cbbfe6050994e67a497ae530955dcda7e79084319321c49969e0fd/cython-3.2.9-cp39-abi3-win32.whl", hash = "sha256:61d4abbf84f77c8d19361d05d9f51d65d8d95e74f736eae55fa1aed8a1430469", size = 2435609, upload-time = "2026-07-24T06:22:40.005Z" },
     { url = "https://files.pythonhosted.org/packages/17/ef/cf0e1bd7542296f1752be63b027f90271448d8c8062eac66d8e44a79b883/cython-3.2.9-cp39-abi3-win_arm64.whl", hash = "sha256:57a6a78d14f7dd7d6062d9bca694e2a8c1c14113b6ceceea076abcd1161fdc5a", size = 2458025, upload-time = "2026-07-24T06:22:41.973Z" },
     { url = "https://files.pythonhosted.org/packages/00/ec/e61deec9bcfbb0e1b36f8b5ba75cb44644419b4bfd0fdd666bffd21d9579/cython-3.2.9-py3-none-any.whl", hash = "sha256:a2b0e87f6b80790c929308ca0831d686f7a180feab684fe8cd4a4380bd96aaca", size = 1259272, upload-time = "2026-07-24T06:21:18.95Z" },
-]
-
-[[package]]
-name = "diffrax"
-version = "0.7.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "equinox" },
-    { name = "jax" },
-    { name = "jaxtyping" },
-    { name = "lineax" },
-    { name = "optimistix" },
-    { name = "typing-extensions" },
-    { name = "wadler-lindig" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5a/ea/a22853377a840d70d1d174d43183f12990c66eecf34ba7e76eec781249d0/diffrax-0.7.2.tar.gz", hash = "sha256:9adc70fe90dba83f7dd839845839b2531a3dd736a3944fe1aa26598507cfb48e", size = 155159, upload-time = "2026-02-18T01:14:04.964Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6c/48/c42f657f3d6b4d9d9674c9bc48e763d024511ea4cc1d6e0c68c7b4380c43/diffrax-0.7.2-py3-none-any.whl", hash = "sha256:1beee2f991cd049962fe3c89da28f933753aa66d80bef857533276c9f23301ed", size = 199673, upload-time = "2026-02-18T01:14:03.38Z" },
 ]
 
 [[package]]
@@ -286,6 +268,15 @@ dependencies = [
     { name = "numpy" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5e/ee/f94dd13bfec5c6f2871f40a0eda9102a3e03fe914140e0ce204ad2d75c38/iisignature-0.24.tar.gz", hash = "sha256:0b9314c6e8b80487faf323191fb35986ad4226e86b0c67cf0a3b2939b695b9c6", size = 1253992, upload-time = "2019-12-01T15:26:49.83Z" }
+
+[[package]]
+name = "iniconfig"
+version = "2.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/34/14ca021ce8e5dfedc35312d08ba8bf51fdd999c576889fc2c24cb97f4f10/iniconfig-2.3.0.tar.gz", hash = "sha256:c76315c77db068650d49c5b56314774a7804df16fee4402c1f19d6d15d8c4730", size = 20503, upload-time = "2025-10-18T21:55:43.219Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl", hash = "sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12", size = 7484, upload-time = "2025-10-18T21:55:41.639Z" },
+]
 
 [[package]]
 name = "jax"
@@ -493,21 +484,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lineax"
-version = "0.1.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "equinox" },
-    { name = "jax" },
-    { name = "jaxtyping" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/77/e0/b7e501899cebd6dc609a01645350afa7976d40a8f3c0bfdf4560e448b2b7/lineax-0.1.1.tar.gz", hash = "sha256:187b8ea93b8e1099fb792e81c6e71a9c269f4fcadbb5313fe312d5847f581f9d", size = 53195, upload-time = "2026-05-01T15:59:06.793Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8d/f8/0d32243c6b8e5dbee9097cf0c95bbdf8681ba4463c927c2e3445f3775814/lineax-0.1.1-py3-none-any.whl", hash = "sha256:2e399f1674773ab2ba54d76175a618977a554f47abd0a345198d53d92c07beb2", size = 77567, upload-time = "2026-05-01T15:59:05.517Z" },
-]
-
-[[package]]
 name = "llvmlite"
 version = "0.47.0"
 source = { registry = "https://pypi.org/simple" }
@@ -708,7 +684,7 @@ name = "nvidia-cublas"
 version = "13.1.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cuda-nvrtc" },
+    { name = "nvidia-cuda-nvrtc", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/a1/0bd24ee8c8d03adac032fd2909426a00c88f8c57961b1277ded97f91119f/nvidia_cublas-13.1.1.3-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:b7a210458267ac818974c53038fbec2e969d5c99f305ab15c72522fa9f001dd5", size = 542848918, upload-time = "2026-04-08T18:46:22.985Z" },
@@ -720,7 +696,7 @@ name = "nvidia-cublas-cu12"
 version = "12.9.2.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cuda-nvrtc-cu12" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f7/a2/c96163a0fff1839c0c9548bbdeae7b853b867009e33b9b9264adc238b1cf/nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:5572131a59c3eebeeb1c4c8144f772d49372c20124916e072a0e3fc30df421d5", size = 575012079, upload-time = "2026-04-08T18:51:47.303Z" },
@@ -804,7 +780,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.22.0.52"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12" },
+    { name = "nvidia-cublas-cu12", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/51/ff/c6a098c1e0bccc68aac5f1684526cf8936abb7024dcc46dca315b8a6f47f/nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:cd9011812498376f866b9826331cc965ac922eb2df8549c9f2989f10255e5001", size = 774536507, upload-time = "2026-05-08T15:36:09.067Z" },
@@ -816,7 +792,7 @@ name = "nvidia-cudnn-cu13"
 version = "9.20.0.48"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas" },
+    { name = "nvidia-cublas", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/56/c5/83384d846b2fd17c44bd499b36c75a45ed4f095fbbb2252294e89cea5c5c/nvidia_cudnn_cu13-9.20.0.48-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:e31454ae00094b0c55319d9d15b6fa2fc50a9e1c0f5c8c80fb75258234e731e1", size = 444574296, upload-time = "2026-03-09T19:28:27.751Z" },
@@ -828,7 +804,7 @@ name = "nvidia-cufft"
 version = "12.0.0.61"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink" },
+    { name = "nvidia-nvjitlink", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/ae/f417a75c0259e85c1d2f83ca4e960289a5f814ed0cea74d18c353d3e989d/nvidia_cufft-12.0.0.61-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:2708c852ef8cd89d1d2068bdbece0aa188813a0c934db3779b9b1faa8442e5f5", size = 214053554, upload-time = "2025-09-04T08:31:38.196Z" },
@@ -840,7 +816,7 @@ name = "nvidia-cufft-cu12"
 version = "11.4.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9b/2b/76445b0af890da61b501fde30650a1a4bd910607261b209cccb5235d3daa/nvidia_cufft_cu12-11.4.1.4-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:1a28c9b12260a1aa7a8fd12f5ebd82d027963d635ba82ff39a1acfa7c4c0fbcf", size = 200822453, upload-time = "2025-06-05T20:05:27.889Z" },
@@ -870,9 +846,9 @@ name = "nvidia-cusolver"
 version = "12.0.4.66"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas" },
-    { name = "nvidia-cusparse" },
-    { name = "nvidia-nvjitlink" },
+    { name = "nvidia-cublas", marker = "sys_platform != 'win32'" },
+    { name = "nvidia-cusparse", marker = "sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/c3/b30c9e935fc01e3da443ec0116ed1b2a009bb867f5324d3f2d7e533e776b/nvidia_cusolver-12.0.4.66-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:02c2457eaa9e39de20f880f4bd8820e6a1cfb9f9a34f820eb12a155aa5bc92d2", size = 223467760, upload-time = "2025-09-04T08:33:04.222Z" },
@@ -884,9 +860,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.5.82"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12" },
-    { name = "nvidia-cusparse-cu12" },
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-cublas-cu12", marker = "sys_platform != 'win32'" },
+    { name = "nvidia-cusparse-cu12", marker = "sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/03/99/686ff9bf3a82a531c62b1a5c614476e8dfa24a9d89067aeedf3592ee4538/nvidia_cusolver_cu12-11.7.5.82-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:62efa83e4ace59a4c734d052bb72158e888aa7b770e1a5f601682f16fe5b4fd2", size = 337869834, upload-time = "2025-06-05T20:06:53.125Z" },
@@ -898,7 +874,7 @@ name = "nvidia-cusparse"
 version = "12.6.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink" },
+    { name = "nvidia-nvjitlink", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/94/5c26f33738ae35276672f12615a64bd008ed5be6d1ebcb23579285d960a9/nvidia_cusparse-12.6.3.3-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:80bcc4662f23f1054ee334a15c72b8940402975e0eab63178fc7e670aa59472c", size = 162155568, upload-time = "2025-09-04T08:33:42.864Z" },
@@ -910,7 +886,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.10.65"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5e/6f/8710fbd17cdd1d0fc3fea7d36d5b65ce1933611c31e1861da330206b253a/nvidia_cusparse_cu12-12.5.10.65-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:221c73e7482dd93eda44e65ce567c031c07e2f93f6fa0ecd3ba876a195023e83", size = 366359408, upload-time = "2025-06-05T20:07:42.501Z" },
@@ -967,7 +943,7 @@ name = "nvidia-nvshmem-cu12"
 version = "3.6.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cuda-cccl-cu12" },
+    { name = "nvidia-cuda-cccl-cu12", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fb/da/bd8ae5201f8c5751ece31fe4fe489ece10fbcf5fcc1a595855b6459b6d6e/nvidia_nvshmem_cu12-3.6.5-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:7b38521ff84cdfc68da3360fe249cfbabfe05ee9aa271458857476124b03a420", size = 153109548, upload-time = "2026-03-24T19:19:19.523Z" },
@@ -999,22 +975,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/8c/b9/2ac072041e899a52f20cf9510850ff58295003aa75525e58343591b0cbfb/opt_einsum-3.4.0.tar.gz", hash = "sha256:96ca72f1b886d148241348783498194c577fa30a8faac108586b14f1ba4473ac", size = 63004, upload-time = "2024-09-26T14:33:24.483Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/23/cd/066e86230ae37ed0be70aae89aabf03ca8d9f39c8aea0dec8029455b5540/opt_einsum-3.4.0-py3-none-any.whl", hash = "sha256:69bb92469f86a1565195ece4ac0323943e83477171b91d24c35afe028a90d7cd", size = 71932, upload-time = "2024-09-26T14:33:23.039Z" },
-]
-
-[[package]]
-name = "optimistix"
-version = "0.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "equinox" },
-    { name = "jax" },
-    { name = "jaxtyping" },
-    { name = "lineax" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5c/0b/3bdc0e698cb0d264e5dca0b5bb171342a950a43fa6e046d8c57189298422/optimistix-0.1.0.tar.gz", hash = "sha256:f05c9104748e87e1dc10a0b4a2be94e427f98c3eab0b1d41ea24a593d76be03d", size = 70164, upload-time = "2026-02-16T13:35:43.991Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/63/53/6a81a6ebb1739f19c32002139719d4ee021a349d5bdbe066910feed327a1/optimistix-0.1.0-py3-none-any.whl", hash = "sha256:c8edda7bf7fe48839c93fcd72bce750c950ed9f7033158303150b7ab395add81", size = 101740, upload-time = "2026-02-16T13:35:42.971Z" },
 ]
 
 [[package]]
@@ -1121,6 +1081,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pluggy"
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
+]
+
+[[package]]
 name = "polysigkernel"
 version = "0.0.1"
 source = { git = "https://github.com/luke-a-thompson/polysigkernel.git?rev=807234d4ffc7e123cd3392b78e763c6a41269384#807234d4ffc7e123cd3392b78e763c6a41269384" }
@@ -1148,18 +1117,12 @@ wheels = [
 
 [[package]]
 name = "pysiglib"
-version = "4.0.0rc1"
-source = { registry = "https://pypi.org/simple" }
+source = { directory = "../pySigLib" }
 dependencies = [
     { name = "kauri" },
     { name = "numpy" },
     { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "sys_platform == 'win32'" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/6c/a62929b5fcf7f0647760d98c61e11f3e1b0d133f996085f314a2bde0033d/pysiglib-4.0.0rc1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:6b033392e9425be70429f151215cf9570085cdbe50dadef78680f1f89c253c6a", size = 909123, upload-time = "2026-08-02T17:25:28.229Z" },
-    { url = "https://files.pythonhosted.org/packages/1f/d8/68b5e85cb1ec6897f16fb7f233f37d3ec4d1f882818b25a325991ab54368/pysiglib-4.0.0rc1-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5aa0a27ce13381684ef09bac5188ed840c915b1d63fe7b14976494a225251958", size = 1452770, upload-time = "2026-08-02T17:25:29.954Z" },
-    { url = "https://files.pythonhosted.org/packages/81/45/7e3029875de5cd182980b415e4b29e4418134de7d3b58c3664aefb2606c1/pysiglib-4.0.0rc1-py3-none-win_amd64.whl", hash = "sha256:6f5c678b26446a4d0cf5ca706a3bcd0c41273d9a6894fee3a72ba862149aa470", size = 1238273, upload-time = "2026-08-02T17:25:31.61Z" },
 ]
 
 [package.optional-dependencies]
@@ -1167,16 +1130,40 @@ cuda = [
     { name = "pysiglib-cuda" },
 ]
 
+[package.metadata]
+requires-dist = [
+    { name = "jax", marker = "extra == 'jax'", specifier = ">=0.9.1" },
+    { name = "kauri", specifier = ">=2.3.0" },
+    { name = "numpy" },
+    { name = "pysiglib-cuda", marker = "extra == 'cuda'", specifier = "==4.0.0rc1" },
+    { name = "torch" },
+]
+provides-extras = ["cuda", "jax"]
+
 [[package]]
 name = "pysiglib-cuda"
-version = "4.0.0rc1"
-source = { registry = "https://pypi.org/simple" }
+source = { directory = "../pySigLib/plugins/cuda" }
 dependencies = [
     { name = "pysiglib" },
 ]
+
+[package.metadata]
+requires-dist = [{ name = "pysiglib", specifier = "==4.0.0rc1" }]
+
+[[package]]
+name = "pytest"
+version = "9.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "iniconfig" },
+    { name = "packaging" },
+    { name = "pluggy" },
+    { name = "pygments" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa3c9d3fe98a76a1d14c74a9e266d397cf6eb64be5e01/pytest-9.1.1.tar.gz", hash = "sha256:1088fbde8f2b49d95a549a195707afa7a76a3ce9bcadc26b6d71f0ffda5fe313", size = 1636369, upload-time = "2026-06-19T10:58:32.857Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/35/b9/2b275464eac9a25e8ae7c3342b5e0392cb6557c318b0c33c8bed9f6e7bb5/pysiglib_cuda-4.0.0rc1-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:31370e84cb157dfa0f288026f644ab1690c1db56cb38e665c38682461894d1f7", size = 71731745, upload-time = "2026-08-02T17:26:08.119Z" },
-    { url = "https://files.pythonhosted.org/packages/d6/cb/fb14990ac89a73e82e2a3672449f8e607691b13b1824f6794d7ef2e6a652/pysiglib_cuda-4.0.0rc1-py3-none-win_amd64.whl", hash = "sha256:16f95771fb6251dc00df900e237e5dcfef2b78eff0fe1899bf6de1aa60c53d6a", size = 71566512, upload-time = "2026-08-02T17:26:12.827Z" },
+    { url = "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl", hash = "sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c", size = 386536, upload-time = "2026-06-19T10:58:31.347Z" },
 ]
 
 [[package]]
@@ -1220,20 +1207,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c0/8f/0722ca900cc807c13a6a0c696dacf35430f72e0ec571c4275d2371fca3e9/rich-15.0.0.tar.gz", hash = "sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36", size = 230680, upload-time = "2026-04-12T08:24:00.75Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl", hash = "sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb", size = 310654, upload-time = "2026-04-12T08:24:02.83Z" },
-]
-
-[[package]]
-name = "roughpy"
-version = "0.3.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5b/55/4fe9b66e60adfd93e208924364b45e1684d3014f11bb1d466daf42a3ddbb/roughpy-0.3.0.tar.gz", hash = "sha256:db5d5ee5319c504603061687756c7f88cdd28a3103b58ecc01a411e98dfa0119", size = 1262081, upload-time = "2026-03-23T18:03:09.174Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/96/7d3ba6a9c742aa4d013d042d410159b935f6c31046daaa01d21b569d0372/roughpy-0.3.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:a2d11e54a36b32ca7718d1b1e21e87bf413f71a9899801a0dc46e1257a8a745a", size = 3334321, upload-time = "2026-03-23T18:02:53.486Z" },
-    { url = "https://files.pythonhosted.org/packages/f5/ae/fcd9650b9fcc4bd16bf9a15169de2ae9934ce8d37b81a13a9f53767e74af/roughpy-0.3.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6f59328905a6f9a033dbc5dab8193d4d7e554592d296f3bbb2d6330d44946e33", size = 4981673, upload-time = "2026-03-23T18:02:54.636Z" },
-    { url = "https://files.pythonhosted.org/packages/79/15/f4a3283e6440f6e974b6f4ce77af1562594cad4d091fc35c26ab0afde7cb/roughpy-0.3.0-cp312-cp312-win_amd64.whl", hash = "sha256:efcf9edfaf22a5380f5b5f81ac4aaee515b56612a2f358366494cd87915daa3e", size = 3287384, upload-time = "2026-03-23T18:02:55.812Z" },
 ]
 
 [[package]]
@@ -1329,13 +1302,11 @@ all = [
     { name = "ninja" },
     { name = "pathsig" },
     { name = "pysiglib", extra = ["cuda"] },
-    { name = "roughpy" },
     { name = "scikit-build-core" },
     { name = "sigkernel" },
     { name = "signatory" },
     { name = "signature-py" },
     { name = "signax" },
-    { name = "stochastax" },
     { name = "tensordev" },
     { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "sys_platform == 'win32'" },
@@ -1374,9 +1345,6 @@ pysiglib = [
     { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "sys_platform == 'win32'" },
 ]
-roughpy = [
-    { name = "roughpy" },
-]
 sigkerax = [
     { name = "jax", extra = ["cuda"] },
 ]
@@ -1397,13 +1365,14 @@ signax = [
     { name = "jax", extra = ["cuda"] },
     { name = "signax" },
 ]
-stochastax = [
-    { name = "jax", extra = ["cuda"] },
-    { name = "stochastax" },
-]
 tensordev = [
     { name = "jax", extra = ["cuda"] },
     { name = "tensordev" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
 ]
 
 [package.metadata]
@@ -1418,7 +1387,6 @@ requires-dist = [
     { name = "jax", extras = ["cuda"], marker = "extra == 'polysigkernel'" },
     { name = "jax", extras = ["cuda"], marker = "extra == 'sigkerax'" },
     { name = "jax", extras = ["cuda"], marker = "extra == 'signax'" },
-    { name = "jax", extras = ["cuda"], marker = "extra == 'stochastax'" },
     { name = "jax", extras = ["cuda"], marker = "extra == 'tensordev'" },
     { name = "keras-sig", marker = "extra == 'all'", git = "https://github.com/remigenet/keras_sig.git?rev=32367ad019ede3c31c2b6f3a1197090696d4a8eb" },
     { name = "keras-sig", marker = "extra == 'keras-sig'", git = "https://github.com/remigenet/keras_sig.git?rev=32367ad019ede3c31c2b6f3a1197090696d4a8eb" },
@@ -1430,11 +1398,9 @@ requires-dist = [
     { name = "pathsig", marker = "extra == 'all'", specifier = "==0.2.1" },
     { name = "pathsig", marker = "extra == 'pathsig'", specifier = "==0.2.1" },
     { name = "polysigkernel", marker = "extra == 'polysigkernel'", git = "https://github.com/luke-a-thompson/polysigkernel.git?rev=807234d4ffc7e123cd3392b78e763c6a41269384" },
-    { name = "pysiglib", extras = ["cuda"], marker = "extra == 'all'", specifier = "==4.0.0rc1" },
-    { name = "pysiglib", extras = ["cuda"], marker = "extra == 'pysiglib'", specifier = "==4.0.0rc1" },
+    { name = "pysiglib", extras = ["cuda"], marker = "extra == 'all'", directory = "../pySigLib" },
+    { name = "pysiglib", extras = ["cuda"], marker = "extra == 'pysiglib'", directory = "../pySigLib" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "roughpy", marker = "extra == 'all'", specifier = "==0.3.0" },
-    { name = "roughpy", marker = "extra == 'roughpy'", specifier = "==0.3.0" },
     { name = "scikit-build-core", marker = "extra == 'all'", specifier = ">=0.10" },
     { name = "scikit-build-core", marker = "extra == 'pathsig'", specifier = ">=0.10" },
     { name = "sigkernel", marker = "extra == 'all'", git = "https://github.com/crispitagorico/sigkernel.git?rev=40a583155ea8d2194af0e90dddab37e2659cfcfd" },
@@ -1445,8 +1411,6 @@ requires-dist = [
     { name = "signature-py", marker = "extra == 'signature-rs'", git = "https://github.com/ChosunOne/signature-rs.git?subdirectory=signature-py&rev=671b0fba16f1c542e76910c2825a9e8b185d3a93" },
     { name = "signax", marker = "extra == 'all'", git = "https://github.com/anh-tong/signax?rev=4961f361b60d293f4e7679dba028b93dead89c39" },
     { name = "signax", marker = "extra == 'signax'", git = "https://github.com/anh-tong/signax?rev=4961f361b60d293f4e7679dba028b93dead89c39" },
-    { name = "stochastax", marker = "extra == 'all'", git = "https://github.com/luke-a-thompson/Stochastax.git?rev=09c9612e9352bb05a0a92a30e2bc391cdd2c78e1" },
-    { name = "stochastax", marker = "extra == 'stochastax'", git = "https://github.com/luke-a-thompson/Stochastax.git?rev=09c9612e9352bb05a0a92a30e2bc391cdd2c78e1" },
     { name = "tensordev", marker = "extra == 'all'", specifier = "==0.0.2" },
     { name = "tensordev", marker = "extra == 'tensordev'", specifier = "==0.0.2" },
     { name = "torch", marker = "sys_platform == 'win32' and extra == 'all'", specifier = ">=2.9.1", index = "https://download.pytorch.org/whl/cu130" },
@@ -1465,7 +1429,10 @@ requires-dist = [
     { name = "torch", marker = "sys_platform != 'win32' and extra == 'signatory'", specifier = ">=2.9.1" },
     { name = "tqdm" },
 ]
-provides-extras = ["chen-signatures", "iisignature", "roughpy", "signature-rs", "log-signatures-pytorch", "signatory", "pathsig", "pysiglib", "stochastax", "signax", "keras-sig", "polysigkernel", "sigkerax", "sigkernel", "tensordev", "all"]
+provides-extras = ["chen-signatures", "iisignature", "signature-rs", "log-signatures-pytorch", "signatory", "pathsig", "pysiglib", "signax", "keras-sig", "polysigkernel", "sigkerax", "sigkernel", "tensordev", "all"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
 name = "sigkernel"
@@ -1543,15 +1510,6 @@ wheels = [
 ]
 
 [[package]]
-name = "stochastax"
-version = "0.5.0"
-source = { git = "https://github.com/luke-a-thompson/Stochastax.git?rev=09c9612e9352bb05a0a92a30e2bc391cdd2c78e1#09c9612e9352bb05a0a92a30e2bc391cdd2c78e1" }
-dependencies = [
-    { name = "diffrax" },
-    { name = "jax" },
-]
-
-[[package]]
 name = "sympy"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1624,19 +1582,19 @@ resolution-markers = [
 dependencies = [
     { name = "cuda-bindings", marker = "sys_platform == 'linux'" },
     { name = "cuda-toolkit", extra = ["cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "sys_platform == 'linux'" },
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "jinja2" },
-    { name = "networkx" },
+    { name = "filelock", marker = "sys_platform != 'win32'" },
+    { name = "fsspec", marker = "sys_platform != 'win32'" },
+    { name = "jinja2", marker = "sys_platform != 'win32'" },
+    { name = "networkx", marker = "sys_platform != 'win32'" },
     { name = "nvidia-cublas", marker = "sys_platform == 'linux'" },
     { name = "nvidia-cudnn-cu13", marker = "sys_platform == 'linux'" },
     { name = "nvidia-cusparselt-cu13", marker = "sys_platform == 'linux'" },
     { name = "nvidia-nccl-cu13", marker = "sys_platform == 'linux'" },
     { name = "nvidia-nvshmem-cu13", marker = "sys_platform == 'linux'" },
-    { name = "setuptools" },
-    { name = "sympy" },
+    { name = "setuptools", marker = "sys_platform != 'win32'" },
+    { name = "sympy", marker = "sys_platform != 'win32'" },
     { name = "triton", marker = "sys_platform == 'linux'" },
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/bb/285d643f254731294c9b595a007eac39db4600a98682d7bca688f42ca164/torch-2.12.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:b41339df93d491435e790ff8bcbae1c0ce777175889bfd1281d119862793e6a2", size = 88010197, upload-time = "2026-05-13T14:55:35.414Z" },
@@ -1652,13 +1610,13 @@ resolution-markers = [
     "sys_platform == 'win32'",
 ]
 dependencies = [
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "jinja2" },
-    { name = "networkx" },
-    { name = "setuptools" },
-    { name = "sympy" },
-    { name = "typing-extensions" },
+    { name = "filelock", marker = "sys_platform == 'win32'" },
+    { name = "fsspec", marker = "sys_platform == 'win32'" },
+    { name = "jinja2", marker = "sys_platform == 'win32'" },
+    { name = "networkx", marker = "sys_platform == 'win32'" },
+    { name = "setuptools", marker = "sys_platform == 'win32'" },
+    { name = "sympy", marker = "sys_platform == 'win32'" },
+    { name = "typing-extensions", marker = "sys_platform == 'win32'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.13.0%2Bcu130-cp312-cp312-win_amd64.whl", hash = "sha256:2efab1e83604ca628c6d85b9e188c153690980498d1297081a9dad704919303c", upload-time = "2026-07-08T20:26:27Z" },

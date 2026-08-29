@@ -8,7 +8,7 @@ startup, path generation, and input conversion are outside the timed region.
 Batched timings cover the complete batch, not one path.
 
 Sweeps default to three untimed warmup iterations. The paper benchmark uses
-one warmup, three measured calls, and reports the minimum measured runtime.
+one warmup, ten measured calls, and reports the minimum measured runtime.
 The signature paper sweep uses `N=10000`; the other paper sweeps use `N=1000`.
 
 ## Quick start
@@ -31,17 +31,23 @@ uv run src/orchestrator.py config/smoke.yaml
 Run every problem-specific paper benchmark:
 
 ```bash
-uv run run_paper_benchmark.py
+uv run --reinstall-package pysiglib --reinstall-package pysiglib-cuda \
+  run_paper_benchmark.py
 ```
 
 Each problem can also be run independently:
 
 ```bash
-uv run run_paper_signatures.py
-uv run run_paper_logsignatures.py
-uv run run_paper_branched_signatures.py
-uv run run_paper_branched_logsignatures.py
-uv run run_paper_signature_kernels.py
+uv run --reinstall-package pysiglib --reinstall-package pysiglib-cuda \
+  run_paper_signatures.py
+uv run --reinstall-package pysiglib --reinstall-package pysiglib-cuda \
+  run_paper_logsignatures.py
+uv run --reinstall-package pysiglib --reinstall-package pysiglib-cuda \
+  run_paper_branched_signatures.py
+uv run --reinstall-package pysiglib --reinstall-package pysiglib-cuda \
+  run_paper_branched_logsignatures.py
+uv run --reinstall-package pysiglib --reinstall-package pysiglib-cuda \
+  run_paper_signature_kernels.py
 ```
 
 Run the signature memory benchmark separately:
@@ -86,16 +92,18 @@ uv run src/plotting.py runs/benchmark_TIMESTAMP
 
 | Config | Scope | Batch | Repeats |
 | --- | --- | ---: | ---: |
-| `config/benchmark_sweep.yaml` | Signature family; `N=256,512,1024`, `d=2,4,8,16`, `m=2,3` | 256 | 5 |
-| `config/paper_signatures_sweep.yaml` | Forward signatures and `sig_backprop`; `N=10000` | 256 | 3 |
-| `config/paper_logsignatures_sweep.yaml` | Forward log-signatures and backprop; `N=1000` | 256 | 3 |
-| `config/paper_branched_signatures_sweep.yaml` | Forward planar/non-planar branched signatures and backprop; `N=1000` | 256 | 3 |
-| `config/paper_branched_logsignatures_sweep.yaml` | Forward planar/non-planar branched log-signatures and backprop; `N=1000` | 256 | 3 |
-| `config/paper_signature_kernel_sweep.yaml` | Forward signature kernels and backprop; `N=1000` | 32 x 32 | 3 |
-| `config/signature_kernel_sweep.yaml` | Signature kernels; `N=200,400,800`, `d=2,4,8,16` | 32 × 32 | 10 |
+| `config/benchmark_sweep.yaml` | Signature family; `N=256,512,1024`, `d=2,4,8,16`, `m=2,3` | 256 | 10 |
+| `config/paper_signatures_sweep.yaml` | Forward signatures and `sig_backprop`; `N=10000` | 256 | 10 |
+| `config/paper_logsignatures_sweep.yaml` | Forward log-signatures and backprop; `N=1000` | 256 | 10 |
+| `config/paper_branched_signatures_sweep.yaml` | Forward planar/non-planar branched signatures and backprop; `N=1000` | 256 | 10 |
+| `config/paper_branched_logsignatures_sweep.yaml` | Forward planar/non-planar branched log-signatures and backprop; `N=1000` | 256 | 10 |
+| `config/paper_signature_kernel_sweep.yaml` | Finite-difference signature kernels and backprop; `N=1000` | 32 x 32 | 10 |
+| `config/paper_polynomial_signature_kernel_sweep.yaml` | Polynomial signature kernels and backprop; `N=1000` | 32 x 32 | 10 |
+| `config/signature_kernel_sweep.yaml` | Finite-difference signature kernels; `N=200,400,800`, `d=2,4,8,16` | 32 x 32 | 10 |
+| `config/polynomial_signature_kernel_sweep.yaml` | Polynomial signature kernels; `N=200,400,800`, `d=2,4,8,16` | 32 x 32 | 10 |
 | `config/combined_sweep.yaml` | All operations on the kernel-safe grid | 32 | 10 |
 | `config/bnrde_sweep.yaml` | Focused GPU log/branched-signature sweep | 256 | 10 |
-| `config/smoke.yaml` | Minimal CPU check | 1 | 3 |
+| `config/smoke.yaml` | Minimal CPU check | 1 | 10 |
 
 Edit `config/libraries_registry.yaml` to enable adapters and select their
 backends. A sweep may use `libraries` to select registry entries. Edit the
@@ -106,7 +114,6 @@ paper sweep YAML to change its package list or parameter grid.
 | Library | Backends | Operations |
 | --- | --- | --- |
 | `iisignature` | CPU | signature, logsignature, backprop |
-| `roughpy` | CPU | signature, logsignature |
 | `signature-rs` | CPU | logsignature |
 | `log-signatures-pytorch` | CPU, GPU | signature, logsignature, backprop |
 | `signatory` | CPU, GPU | signature, logsignature, backprop |
@@ -114,8 +121,7 @@ paper sweep YAML to change its package list or parameter grid.
 | `pysiglib` | CPU, GPU | signature, logsignature, planar/non-planar branched signature, signature kernel, backprop |
 | `polysigkernel` | CPU, GPU | signature kernel, backprop |
 | `sigkerax` | CPU, GPU | signature kernel, backprop |
-| `sigkernel` | GPU | signature kernel, backprop |
-| `stochastax` | CPU, GPU | signature, logsignature, planar/non-planar branched signature, backprop |
+| `sigkernel` | CPU, GPU | signature kernel, backprop |
 | `signax` | CPU, GPU | signature, logsignature, backprop |
 | `tensordev` | CPU, GPU | signature, logsignature, backprop |
 | `keras_sig` | CPU, GPU | signature, backprop |
@@ -123,18 +129,23 @@ paper sweep YAML to change its package list or parameter grid.
 
 Important comparison notes:
 
-- `roughpy`, `signature-rs`, and `chen-signatures` use explicit Python batch
+- `signature-rs` and `chen-signatures` use explicit Python batch
   loops because their public APIs are single-path. Their timings include that
   loop overhead.
 - JAX kernels compile during warmup and synchronize every measured call.
   `log-signatures-pytorch` uses eager CPU execution and compiled GPU execution.
+- Finite-difference kernel comparisons use `float64` on CPU and `float32` on
+  GPU. Polynomial kernel comparisons use `float32` on both backends.
 - `pathsig` and `signatory` report compact Lyndon-basis log-signatures.
   `tensordev` reports an expanded word-basis tensor logarithm, so its
   log-signature output size differs.
 
-The lockfiles pin the environments. `signature-py` builds from pinned Rust
+The lockfiles pin the environments. `pysiglib` and its CUDA plugin build from
+the sibling `../pySigLib` source checkout. `signature-py` builds from pinned Rust
 source; `log-signatures-pytorch` uses a pinned compatibility wheel; and
 `pathsig` and `signatory` build their extensions once and reuse the uv cache.
+If CMake cannot locate CUDA under WSL, prefix the uv command with
+`CUDACXX=/usr/local/cuda/bin/nvcc`.
 
 ## Protocol and output
 
@@ -165,8 +176,8 @@ Each `runs/benchmark_TIMESTAMP/` directory contains:
 
 For signature operations, `t_ms` is the latency for `batch_size` paths. For
 signature kernels, it is the latency for a `batch_size × batch_size` matrix.
-`alloc_bytes` is only the average net Python heap change visible to
-`tracemalloc`; it excludes native, framework-pool, and device memory.
+`alloc_bytes` is retained for schema compatibility and is always zero. Use the
+dedicated memory benchmark for host and device peak-memory measurements.
 
 ## Development
 
