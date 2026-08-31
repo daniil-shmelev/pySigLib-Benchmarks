@@ -192,6 +192,24 @@ wheels = [
 ]
 
 [[package]]
+name = "diffrax"
+version = "0.7.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "equinox" },
+    { name = "jax" },
+    { name = "jaxtyping" },
+    { name = "lineax" },
+    { name = "optimistix" },
+    { name = "typing-extensions" },
+    { name = "wadler-lindig" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5a/ea/a22853377a840d70d1d174d43183f12990c66eecf34ba7e76eec781249d0/diffrax-0.7.2.tar.gz", hash = "sha256:9adc70fe90dba83f7dd839845839b2531a3dd736a3944fe1aa26598507cfb48e", size = 155159, upload-time = "2026-02-18T01:14:04.964Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/48/c42f657f3d6b4d9d9674c9bc48e763d024511ea4cc1d6e0c68c7b4380c43/diffrax-0.7.2-py3-none-any.whl", hash = "sha256:1beee2f991cd049962fe3c89da28f933753aa66d80bef857533276c9f23301ed", size = 199673, upload-time = "2026-02-18T01:14:03.38Z" },
+]
+
+[[package]]
 name = "equinox"
 version = "0.13.8"
 source = { registry = "https://pypi.org/simple" }
@@ -481,6 +499,21 @@ source = { git = "https://github.com/ChosunOne/signature-rs.git?subdirectory=lie
 dependencies = [
     { name = "commutator-py" },
     { name = "lyndon-py" },
+]
+
+[[package]]
+name = "lineax"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "equinox" },
+    { name = "jax" },
+    { name = "jaxtyping" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/77/e0/b7e501899cebd6dc609a01645350afa7976d40a8f3c0bfdf4560e448b2b7/lineax-0.1.1.tar.gz", hash = "sha256:187b8ea93b8e1099fb792e81c6e71a9c269f4fcadbb5313fe312d5847f581f9d", size = 53195, upload-time = "2026-05-01T15:59:06.793Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/f8/0d32243c6b8e5dbee9097cf0c95bbdf8681ba4463c927c2e3445f3775814/lineax-0.1.1-py3-none-any.whl", hash = "sha256:2e399f1674773ab2ba54d76175a618977a554f47abd0a345198d53d92c07beb2", size = 77567, upload-time = "2026-05-01T15:59:05.517Z" },
 ]
 
 [[package]]
@@ -978,6 +1011,22 @@ wheels = [
 ]
 
 [[package]]
+name = "optimistix"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "equinox" },
+    { name = "jax" },
+    { name = "jaxtyping" },
+    { name = "lineax" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5c/0b/3bdc0e698cb0d264e5dca0b5bb171342a950a43fa6e046d8c57189298422/optimistix-0.1.0.tar.gz", hash = "sha256:f05c9104748e87e1dc10a0b4a2be94e427f98c3eab0b1d41ea24a593d76be03d", size = 70164, upload-time = "2026-02-16T13:35:43.991Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/63/53/6a81a6ebb1739f19c32002139719d4ee021a349d5bdbe066910feed327a1/optimistix-0.1.0-py3-none-any.whl", hash = "sha256:c8edda7bf7fe48839c93fcd72bce750c950ed9f7033158303150b7ab395add81", size = 101740, upload-time = "2026-02-16T13:35:42.971Z" },
+]
+
+[[package]]
 name = "optree"
 version = "0.19.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1307,6 +1356,7 @@ all = [
     { name = "signatory" },
     { name = "signature-py" },
     { name = "signax" },
+    { name = "stochastax" },
     { name = "tensordev" },
     { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "sys_platform == 'win32'" },
@@ -1365,6 +1415,10 @@ signax = [
     { name = "jax", extra = ["cuda"] },
     { name = "signax" },
 ]
+stochastax = [
+    { name = "jax", extra = ["cuda"] },
+    { name = "stochastax" },
+]
 tensordev = [
     { name = "jax", extra = ["cuda"] },
     { name = "tensordev" },
@@ -1387,6 +1441,7 @@ requires-dist = [
     { name = "jax", extras = ["cuda"], marker = "extra == 'polysigkernel'" },
     { name = "jax", extras = ["cuda"], marker = "extra == 'sigkerax'" },
     { name = "jax", extras = ["cuda"], marker = "extra == 'signax'" },
+    { name = "jax", extras = ["cuda"], marker = "extra == 'stochastax'" },
     { name = "jax", extras = ["cuda"], marker = "extra == 'tensordev'" },
     { name = "keras-sig", marker = "extra == 'all'", git = "https://github.com/remigenet/keras_sig.git?rev=32367ad019ede3c31c2b6f3a1197090696d4a8eb" },
     { name = "keras-sig", marker = "extra == 'keras-sig'", git = "https://github.com/remigenet/keras_sig.git?rev=32367ad019ede3c31c2b6f3a1197090696d4a8eb" },
@@ -1411,6 +1466,8 @@ requires-dist = [
     { name = "signature-py", marker = "extra == 'signature-rs'", git = "https://github.com/ChosunOne/signature-rs.git?subdirectory=signature-py&rev=671b0fba16f1c542e76910c2825a9e8b185d3a93" },
     { name = "signax", marker = "extra == 'all'", git = "https://github.com/anh-tong/signax?rev=4961f361b60d293f4e7679dba028b93dead89c39" },
     { name = "signax", marker = "extra == 'signax'", git = "https://github.com/anh-tong/signax?rev=4961f361b60d293f4e7679dba028b93dead89c39" },
+    { name = "stochastax", marker = "extra == 'all'", git = "https://github.com/luke-a-thompson/Stochastax.git?rev=09c9612e9352bb05a0a92a30e2bc391cdd2c78e1" },
+    { name = "stochastax", marker = "extra == 'stochastax'", git = "https://github.com/luke-a-thompson/Stochastax.git?rev=09c9612e9352bb05a0a92a30e2bc391cdd2c78e1" },
     { name = "tensordev", marker = "extra == 'all'", specifier = "==0.0.2" },
     { name = "tensordev", marker = "extra == 'tensordev'", specifier = "==0.0.2" },
     { name = "torch", marker = "sys_platform == 'win32' and extra == 'all'", specifier = ">=2.9.1", index = "https://download.pytorch.org/whl/cu130" },
@@ -1429,7 +1486,7 @@ requires-dist = [
     { name = "torch", marker = "sys_platform != 'win32' and extra == 'signatory'", specifier = ">=2.9.1" },
     { name = "tqdm" },
 ]
-provides-extras = ["chen-signatures", "iisignature", "signature-rs", "log-signatures-pytorch", "signatory", "pathsig", "pysiglib", "signax", "keras-sig", "polysigkernel", "sigkerax", "sigkernel", "tensordev", "all"]
+provides-extras = ["chen-signatures", "iisignature", "signature-rs", "log-signatures-pytorch", "signatory", "pathsig", "pysiglib", "stochastax", "signax", "keras-sig", "polysigkernel", "sigkerax", "sigkernel", "tensordev", "all"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0" }]
@@ -1507,6 +1564,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/81/68/dddd76117df2ef14c943c6bbb6618be5c9401280046f4ddfc9fb4596a1b8/statsmodels-0.14.6-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:19b58cf7474aa9e7e3b0771a66537148b2df9b5884fbf156096c0e6c1ff0469d", size = 10339446, upload-time = "2025-12-05T23:10:28.503Z" },
     { url = "https://files.pythonhosted.org/packages/56/4a/dce451c74c4050535fac1ec0c14b80706d8fc134c9da22db3c8a0ec62c33/statsmodels-0.14.6-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:81e7dcc5e9587f2567e52deaff5220b175bf2f648951549eae5fc9383b62bc37", size = 10368705, upload-time = "2025-12-05T23:10:44.339Z" },
     { url = "https://files.pythonhosted.org/packages/60/15/3daba2df40be8b8a9a027d7f54c8dedf24f0d81b96e54b52293f5f7e3418/statsmodels-0.14.6-cp312-cp312-win_amd64.whl", hash = "sha256:b5eb07acd115aa6208b4058211138393a7e6c2cf12b6f213ede10f658f6a714f", size = 9543991, upload-time = "2025-12-05T23:10:58.536Z" },
+]
+
+[[package]]
+name = "stochastax"
+version = "0.5.0"
+source = { git = "https://github.com/luke-a-thompson/Stochastax.git?rev=09c9612e9352bb05a0a92a30e2bc391cdd2c78e1#09c9612e9352bb05a0a92a30e2bc391cdd2c78e1" }
+dependencies = [
+    { name = "diffrax" },
+    { name = "jax" },
 ]
 
 [[package]]

@@ -44,6 +44,10 @@ pysiglib = [
     "pysiglib[cuda]==4.0.0rc1",
     "torch>=2.9.1",
 ]
+stochastax = [
+    "jax[cuda]",
+    "stochastax",
+]
 signax = [
     "jax[cuda]",
     "signax",
@@ -77,6 +81,7 @@ all = [
     "pathsig==0.2.1",
     "scikit-build-core>=0.10",
     "signature-py",
+    "stochastax",
     "signax",
     "signatory",
     "sigkernel",
@@ -91,6 +96,7 @@ torch = [
 ]
 pysiglib = { path = "../pySigLib" }
 pysiglib-cuda = { path = "../pySigLib/plugins/cuda" }
+stochastax = { git = "https://github.com/luke-a-thompson/Stochastax.git", rev = "09c9612e9352bb05a0a92a30e2bc391cdd2c78e1" }
 keras_sig = { git = "https://github.com/remigenet/keras_sig.git", rev = "32367ad019ede3c31c2b6f3a1197090696d4a8eb" }
 signax = { git = "https://github.com/anh-tong/signax", rev = "4961f361b60d293f4e7679dba028b93dead89c39" }
 polysigkernel = { git = "https://github.com/luke-a-thompson/polysigkernel.git", rev = "807234d4ffc7e123cd3392b78e763c6a41269384" }

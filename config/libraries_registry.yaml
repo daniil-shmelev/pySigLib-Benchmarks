@@ -160,6 +160,30 @@ libraries:
       - signaturekernel
       - signaturekernel_backprop
 
+  stochastax:
+    type: python
+    memory_framework: jax
+    script: "adapters/python/run_stochastax.py"
+    extras:
+      - stochastax
+    backends:
+      - name: cpu
+        env:
+          JAX_PLATFORM_NAME: cpu
+          XLA_FLAGS: "--xla_cpu_multi_thread_eigen=true intra_op_parallelism_threads={cpu_count}"
+      - name: gpu
+        env:
+          JAX_PLATFORM_NAME: gpu
+    operations:
+      - branchedsignature_nonplanar
+      - branchedsignature_planar
+      - branchedsignature_nonplanar_backprop
+      - branchedsignature_planar_backprop
+      - branchedlogsignature_nonplanar
+      - branchedlogsignature_planar
+      - branchedlogsignature_nonplanar_backprop
+      - branchedlogsignature_planar_backprop
+
   signax:
     type: python
     memory_framework: jax

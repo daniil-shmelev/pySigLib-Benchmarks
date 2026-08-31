@@ -43,7 +43,7 @@ PAPER_LOGSIGNATURE_LIBRARIES = (
     PAPER_SIGNATURE_LIBRARIES
     | {"signature-rs"}
 ) - {"keras_sig", "tensordev"}
-PAPER_BRANCHED_LIBRARIES = {"pysiglib"}
+PAPER_BRANCHED_LIBRARIES = {"pysiglib", "stochastax"}
 PAPER_FINITE_DIFFERENCE_KERNEL_LIBRARIES = {
     "pysiglib",
     "sigkerax",
@@ -57,6 +57,7 @@ PAPER_JAX_LIBRARIES = {
     "polysigkernel",
     "sigkerax",
     "signax",
+    "stochastax",
     "tensordev",
     "keras_sig",
 }

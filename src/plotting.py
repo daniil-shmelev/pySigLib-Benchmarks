@@ -518,7 +518,10 @@ def make_heatmap_plot(
                         series_key_set.add(
                             (library, backend, "", "", batch_size)
                         )
-                series_keys = sorted(series_key_set)
+                series_keys = sorted(
+                    series_key_set,
+                    key=lambda key: (key[0] != "pysiglib", key),
+                )
                 libraries = [
                     _series_label(key, include_backend=False)
                     for key in series_keys

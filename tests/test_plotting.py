@@ -185,6 +185,40 @@ def test_make_heatmap_plot_uses_backend_shared_operation_scale(
     assert captured_limits == [(0.5, 20.0), (0.5, 20.0)]
 
 
+def test_make_heatmap_plot_places_pysiglib_first(tmp_path, monkeypatch):
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(
+        "\n".join([
+            "N,d,m,batch_size,path_kind,operation,backend,language,library,method,path_type,t_ms,alloc_bytes",
+            "1000,2,3,32,brownian,signaturekernel,cpu,python,sigkerax,method,path,10,0",
+            "1000,2,3,32,brownian,signaturekernel,cpu,python,pysiglib,method,path,20,0",
+            "1000,2,3,32,brownian,signaturekernel,cpu,python,sigkernel,method,path,30,0",
+        ]),
+        encoding="utf-8",
+    )
+    captured_libraries = []
+    configure_heatmap_axes = plotting._configure_heatmap_axes
+
+    def capture_libraries(ax, panel, show_titles):
+        captured_libraries.append(panel["libraries"])
+        configure_heatmap_axes(ax, panel, show_titles)
+
+    monkeypatch.setattr(
+        plotting,
+        "_configure_heatmap_axes",
+        capture_libraries,
+    )
+
+    make_heatmap_plot(
+        csv_path,
+        tmp_path / "ordered.pdf",
+        operation="signaturekernel",
+        backend="cpu",
+    )
+
+    assert captured_libraries == [["pysiglib", "sigkerax", "sigkernel"]]
+
+
 def test_annotate_heatmap_labels_oom_failures():
     import matplotlib.pyplot as plt
     import numpy as np

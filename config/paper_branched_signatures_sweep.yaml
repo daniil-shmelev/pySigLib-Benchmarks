@@ -2,6 +2,7 @@
 
 libraries:
     - pysiglib
+    - stochastax
 
 path_kind: "brownian"
 seed: 20260529
