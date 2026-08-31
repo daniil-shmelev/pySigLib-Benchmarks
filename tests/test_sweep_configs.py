@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+import run_benchmarks
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = REPO_ROOT / "config"
@@ -89,6 +91,25 @@ def test_complete_sweep_operation_sets():
         for operation in library["operations"]
     }
     assert registry_operations <= set(combined["operations"])
+
+
+def test_combined_runner_runs_only_paper_heatmap_sweeps():
+    assert run_benchmarks.PAPER_SWEEPS == (
+        "paper_signatures_sweep.yaml",
+        "paper_logsignatures_sweep.yaml",
+        "paper_branched_signatures_sweep.yaml",
+        "paper_branched_logsignatures_sweep.yaml",
+        "paper_signature_kernel_sweep.yaml",
+        "paper_polynomial_signature_kernel_sweep.yaml",
+    )
+
+    finite_difference = _load_yaml("paper_signature_kernel_sweep.yaml")
+    polynomial = _load_yaml("paper_polynomial_signature_kernel_sweep.yaml")
+
+    assert finite_difference["sig_kernel_method"] == "finite_difference"
+    assert "polysigkernel" not in finite_difference["libraries"]
+    assert polynomial["sig_kernel_method"] == "polynomial"
+    assert set(polynomial["libraries"]) == {"pysiglib", "polysigkernel"}
 
 
 def test_every_registry_extra_is_defined():

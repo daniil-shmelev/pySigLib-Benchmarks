@@ -28,6 +28,17 @@ Run a quick CPU smoke test:
 uv run src/orchestrator.py config/smoke.yaml
 ```
 
+Run all sweeps required for the paper heatmaps:
+
+```bash
+uv run --reinstall-package pysiglib --reinstall-package pysiglib-cuda \
+  run_benchmarks.py
+```
+
+This command runs only the six paper sweep configurations. The finite-difference
+and polynomial kernel sweeps use separate run directories and generate separate
+heatmaps.
+
 Run every problem-specific paper benchmark:
 
 ```bash
@@ -101,7 +112,7 @@ uv run src/plotting.py runs/benchmark_TIMESTAMP
 | `config/paper_polynomial_signature_kernel_sweep.yaml` | Polynomial signature kernels and backprop; `N=1000` | 32 x 32 | 10 |
 | `config/signature_kernel_sweep.yaml` | Finite-difference signature kernels; `N=200,400,800`, `d=2,4,8,16` | 32 x 32 | 10 |
 | `config/polynomial_signature_kernel_sweep.yaml` | Polynomial signature kernels; `N=200,400,800`, `d=2,4,8,16` | 32 x 32 | 10 |
-| `config/combined_sweep.yaml` | All operations on the kernel-safe grid | 32 | 10 |
+| `config/combined_sweep.yaml` | All finite-difference-compatible operations on the kernel-safe grid | 32 | 10 |
 | `config/bnrde_sweep.yaml` | Focused GPU log/branched-signature sweep | 256 | 10 |
 | `config/smoke.yaml` | Minimal CPU check | 1 | 10 |
 
