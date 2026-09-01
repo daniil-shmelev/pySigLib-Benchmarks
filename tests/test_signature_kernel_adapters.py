@@ -83,6 +83,31 @@ def test_pysiglib_signaturekernel_matches_standard_api():
     np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
 
 
+def test_pysiglib_polynomial_kernel_matches_standard_api():
+    pytest.importorskip("pysiglib")
+
+    config = _config("signaturekernel")
+    config["sig_kernel_method"] = "polynomial"
+    config["sig_kernel_order"] = 2
+    adapter = PySigLibAdapter(config)
+    path1 = _path_batch()
+    path2 = _path_batch() + 0.2
+
+    got = np.asarray(adapter.run_signaturekernel(path1, path2, 2, 2)())
+    X = adapter._path_array(path1)
+    Y = adapter._path_array(path2)
+    expected = np.asarray(
+        adapter.pysiglib.sig_kernel_gram(
+            X,
+            Y,
+            method="polynomial",
+            order=2,
+        )
+    )
+
+    np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
+
+
 def test_polysigkernel_backprop_matches_direct_vjp():
     pytest.importorskip("jax")
     pytest.importorskip("polysigkernel")
@@ -115,12 +140,85 @@ def test_polysigkernel_backprop_matches_direct_vjp():
     np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
 
 
-def test_pysiglib_signaturekernel_backprop_matches_standard_api():
+def test_pysiglib_signaturekernel_backprop_matches_standard_api(monkeypatch):
     pytest.importorskip("pysiglib")
 
     adapter = PySigLibAdapter(_config("signaturekernel_backprop"))
     path1 = _path_batch()
     path2 = _path_batch() + 0.2
+    forward = adapter.pysiglib.sig_kernel_gram
+    backprop = adapter.pysiglib.sig_kernel_gram_backprop
+    calls = {}
+
+    def checked_forward(*args, **kwargs):
+        calls["forward_return_grid"] = kwargs.get("return_grid")
+        return forward(*args, **kwargs)
+
+    def checked_backprop(*args, **kwargs):
+        calls["backprop_k_grid"] = kwargs.get("k_grid")
+        calls["backprop_return_grid"] = kwargs.get("return_grid")
+        return backprop(*args, **kwargs)
+
+    monkeypatch.setattr(adapter.pysiglib, "sig_kernel_gram", checked_forward)
+    monkeypatch.setattr(
+        adapter.pysiglib,
+        "sig_kernel_gram_backprop",
+        checked_backprop,
+    )
+    got = np.asarray(
+        adapter.run_signaturekernel_backprop(path1, path2, 2, 2)()
+    )
+
+    X = adapter._path_array(path1)
+    Y = adapter._path_array(path2)
+    k_grid = forward(
+        X,
+        Y,
+        dyadic_order=2,
+        return_grid=True,
+    )
+    output = k_grid[..., -1, -1]
+    cotangent = np.asarray(
+        adapter.random_cotangent(output.shape), dtype=output.dtype
+    )
+    expected, _ = backprop(
+        cotangent,
+        X,
+        Y,
+        dyadic_order=2,
+        left_deriv=True,
+        right_deriv=False,
+        k_grid=k_grid,
+        return_grid=False,
+    )
+
+    assert calls["forward_return_grid"] is True
+    assert calls["backprop_k_grid"] is not None
+    assert calls["backprop_return_grid"] is False
+    np.testing.assert_allclose(got, np.asarray(expected), rtol=1e-5, atol=1e-5)
+
+
+def test_pysiglib_polynomial_backprop_does_not_use_a_pde_grid(monkeypatch):
+    pytest.importorskip("pysiglib")
+
+    config = _config("signaturekernel_backprop")
+    config["sig_kernel_method"] = "polynomial"
+    config["sig_kernel_order"] = 2
+    adapter = PySigLibAdapter(config)
+    path1 = _path_batch()
+    path2 = _path_batch() + 0.2
+    backprop = adapter.pysiglib.sig_kernel_gram_backprop
+    calls = {}
+
+    def checked_backprop(*args, **kwargs):
+        calls.update(kwargs)
+        return backprop(*args, **kwargs)
+
+    monkeypatch.setattr(
+        adapter.pysiglib,
+        "sig_kernel_gram_backprop",
+        checked_backprop,
+    )
     got = np.asarray(
         adapter.run_signaturekernel_backprop(path1, path2, 2, 2)()
     )
@@ -130,20 +228,28 @@ def test_pysiglib_signaturekernel_backprop_matches_standard_api():
     output = adapter.pysiglib.sig_kernel_gram(
         X,
         Y,
-        dyadic_order=2,
+        method="polynomial",
+        order=2,
     )
     cotangent = np.asarray(
-        adapter.random_cotangent(output.shape), dtype=output.dtype
+        adapter.random_cotangent(output.shape),
+        dtype=output.dtype,
     )
-    expected, _ = adapter.pysiglib.sig_kernel_gram_backprop(
+    expected, _ = backprop(
         cotangent,
         X,
         Y,
-        dyadic_order=2,
+        method="polynomial",
+        order=2,
         left_deriv=True,
         right_deriv=False,
+        return_grid=False,
     )
 
+    assert calls["method"] == "polynomial"
+    assert calls["order"] == 2
+    assert calls["k_grid"] is None
+    assert calls["return_grid"] is False
     np.testing.assert_allclose(got, np.asarray(expected), rtol=1e-5, atol=1e-5)
 
 
@@ -224,7 +330,7 @@ def test_sigkernel_signaturekernel_matches_direct_api():
     np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
 
 
-def test_sigkernel_backprop_matches_direct_autograd():
+def test_sigkernel_backprop_matches_direct_autograd(monkeypatch):
     pytest.importorskip("sigkernel")
 
     config = _config("signaturekernel_backprop")
@@ -232,13 +338,29 @@ def test_sigkernel_backprop_matches_direct_autograd():
     adapter = SigkernelAdapter(config)
     path1 = _path_batch()
     path2 = _path_batch() + 0.2
-    got = np.asarray(
-        adapter.run_signaturekernel_backprop(path1, path2, 2, 2)()
+    signature_kernel = adapter._signature_kernel()
+    compute_gram = signature_kernel.compute_Gram
+    calls = []
+
+    def checked_compute_gram(*args, **kwargs):
+        calls.append(None)
+        return compute_gram(*args, **kwargs)
+
+    monkeypatch.setattr(adapter, "_signature_kernel", lambda: signature_kernel)
+    monkeypatch.setattr(
+        signature_kernel,
+        "compute_Gram",
+        checked_compute_gram,
     )
+    gradient = adapter.run_signaturekernel_backprop(path1, path2, 2, 2)
+
+    assert len(calls) == 1
+    got = np.asarray(gradient())
+    assert len(calls) == 1
 
     X = adapter._path_tensor(path1, requires_grad=True)
     Y = adapter._path_tensor(path2)
-    output = adapter._signature_kernel().compute_Gram(
+    output = compute_gram(
         X,
         Y,
         sym=False,
@@ -262,3 +384,37 @@ def test_sigkernel_backprop_matches_direct_autograd():
         rtol=1e-5,
         atol=1e-5,
     )
+
+
+def test_sigkernel_backprop_benchmark_times_backward_call(monkeypatch):
+    adapter = SigkernelAdapter.__new__(SigkernelAdapter)
+    adapter.operation = "signaturekernel_backprop"
+    adapter.d = 2
+    adapter.m = 3
+    adapter.dyadic_order = 0
+    adapter.dtype_name = "float64"
+    paths = iter([object(), object()])
+    backward_kernel = object()
+
+    monkeypatch.setattr(adapter, "make_path_input", lambda: next(paths))
+    monkeypatch.setattr(
+        adapter,
+        "run_signaturekernel_backprop",
+        lambda *args: backward_kernel,
+    )
+    timed_kernels = []
+
+    def timing_result(kernel):
+        timed_kernels.append(kernel)
+        return 250.0, 0, [250.0, 270.0, 260.0]
+
+    monkeypatch.setattr(adapter, "manual_timing_loop", timing_result)
+    monkeypatch.setattr(adapter, "output_result", lambda **kwargs: kwargs)
+
+    result = adapter._run_benchmark()
+
+    assert timed_kernels == [backward_kernel]
+    assert result["t_ms"] == 250.0
+    assert result["samples_ms"] == [250.0, 270.0, 260.0]
+    assert result["alloc_bytes"] == 0
+    assert result["method"].startswith("backward(SigKernel.compute_Gram)")

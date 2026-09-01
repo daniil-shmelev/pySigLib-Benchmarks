@@ -29,6 +29,16 @@ class SigkeraxAdapter(BenchmarkAdapter):
 
         self.jax = jax
         self.jnp = jnp
+        self.dtype_name = str(config.get("dtype", "float32"))
+        if self.dtype_name == "float32":
+            self.numpy_dtype = np.float32
+            self.jax_dtype = jnp.float32
+        elif self.dtype_name == "float64":
+            jax.config.update("jax_enable_x64", True)
+            self.numpy_dtype = np.float64
+            self.jax_dtype = jnp.float64
+        else:
+            raise ValueError(f"Unsupported dtype: {self.dtype_name}")
         self.SigKernel = SigKernel
         self.refinement_factor = float(
             config.get("sig_kernel_refinement_factor", 1)
@@ -56,20 +66,20 @@ class SigkeraxAdapter(BenchmarkAdapter):
         solver_class._sig_benchmarks_compatibility = True
 
     def _path_batch(self, path: np.ndarray):
-        path_np = np.ascontiguousarray(path, dtype=np.float32)
+        path_np = np.ascontiguousarray(path, dtype=self.numpy_dtype)
         if path_np.ndim == 2:
             path_np = path_np[None, :, :]
         return self.cached_prepared_input(
-            "sigkerax.jax",
+            f"sigkerax.jax.{self.dtype_name}",
             path,
-            lambda: self.jnp.asarray(path_np, dtype=self.jnp.float32),
+            lambda: self.jnp.asarray(path_np, dtype=self.jax_dtype),
         )
 
     def _signature_kernel(self):
         return self.SigKernel(
             refinement_factor=self.refinement_factor,
             static_kernel_kind="linear",
-            scales=self.jnp.asarray([1.0], dtype=self.jnp.float32),
+            scales=self.jnp.asarray([1.0], dtype=self.jax_dtype),
             add_time=False,
         )
 
@@ -148,7 +158,7 @@ class SigkeraxAdapter(BenchmarkAdapter):
             library="sigkerax",
             method=(
                 f"{method_prefix}(refinement_factor="
-                f"{self.refinement_factor:g},linear)"
+                f"{self.refinement_factor:g},linear,dtype={self.dtype_name})"
             ),
             path_type="jax.Array",
             language="python",

@@ -16,9 +16,8 @@ operations:
 backends:
   - cpu
 
-# Minimal repeats for speed
 batch_size: 1
-repeats: 3
+repeats: 10
 
 # Output directory
 runs_dir: "runs"

@@ -11,6 +11,8 @@ import numpy as np
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import FuncFormatter
 
+from orchestrator import is_oom_failure
+
 SeriesKey = Tuple[str, str, str, str, int]
 
 BASE_FONT_SIZE = 13
@@ -361,52 +363,23 @@ def _heatmap_color_scales_by_operation(
     }
 
 
-def make_heatmap_plot(
+def _load_failure_labels(
     csv_path: Path,
-    output_path: Optional[Path] = None,
-    config: Optional[Dict[str, Any]] = None,
-    show_titles: bool = True,
-    operation: Optional[str] = None,
-    backend: Optional[str] = None,
-) -> Path:
-    """
-    Generate heatmap showing performance across all parameter combinations.
-
-    Args:
-        csv_path: Path to results CSV
-        output_path: Optional output path (defaults to same dir as CSV)
-        config: Optional configuration dict
-        show_titles: Whether to show subplot titles
-        operation: Optional operation to plot in isolation
-        backend: Optional backend to plot in isolation
-
-    Returns:
-        Path to saved plot
-    """
-    all_rows = load_results(csv_path)
-    rows = _rows_for_operation(all_rows, operation, backend)
+) -> Dict[Tuple[Any, ...], str]:
+    """Load recognized failure labels keyed by benchmark task parameters."""
     failure_labels_by_task: Dict[Tuple[Any, ...], str] = {}
     failed_tasks_path = csv_path.parent / "failed_tasks.csv"
     if failed_tasks_path.exists():
         with failed_tasks_path.open("r", encoding="utf-8", newline="") as f:
             for failure in csv.DictReader(f):
-                error_text = " ".join([
-                    failure.get("error_type", ""),
-                    failure.get("reason", ""),
-                ]).lower()
+                error_type = failure.get("error_type", "")
+                reason = failure.get("reason", "")
+                error_text = f"{error_type} {reason}".lower()
                 library = failure.get("library", "").strip()
                 is_log_signatures_pytorch = (
                     library == "log-signatures-pytorch"
                 )
-                if (
-                    "oom" in error_text
-                    or "out of memory" in error_text
-                    or "memoryerror" in error_text
-                    or (
-                        is_log_signatures_pytorch
-                        and "cuda error: device not ready" in error_text
-                    )
-                ):
+                if is_oom_failure(error_type, reason):
                     failure_label = "OOM"
                 elif "worker exited with code 139" in error_text:
                     failure_label = "Crash"
@@ -446,13 +419,68 @@ def make_heatmap_plot(
                 )
                 failure_labels_by_task[task_key] = "CUDA\nLIMIT"
 
-    if not rows:
+    return failure_labels_by_task
+
+
+def _failure_rows(
+    failure_labels_by_task: Dict[Tuple[Any, ...], str],
+) -> List[Dict[str, Any]]:
+    """Convert failure keys into row-shaped data for panel discovery."""
+    return [
+        {
+            "operation": task_key[0],
+            "backend": task_key[1],
+            "m": task_key[2],
+            "N": task_key[3],
+            "d": task_key[4],
+            "library": task_key[5],
+            "batch_size": task_key[6],
+            "language": "",
+            "method": "",
+            "path_type": "",
+        }
+        for task_key in failure_labels_by_task
+    ]
+
+
+def make_heatmap_plot(
+    csv_path: Path,
+    output_path: Optional[Path] = None,
+    config: Optional[Dict[str, Any]] = None,
+    show_titles: bool = True,
+    operation: Optional[str] = None,
+    backend: Optional[str] = None,
+) -> Path:
+    """
+    Generate heatmap showing performance across all parameter combinations.
+
+    Args:
+        csv_path: Path to results CSV
+        output_path: Optional output path (defaults to same dir as CSV)
+        config: Optional configuration dict
+        show_titles: Whether to show subplot titles
+        operation: Optional operation to plot in isolation
+        backend: Optional backend to plot in isolation
+
+    Returns:
+        Path to saved plot
+    """
+    all_rows = load_results(csv_path)
+    rows = _rows_for_operation(all_rows, operation, backend)
+    failure_labels_by_task = _load_failure_labels(csv_path)
+    matching_failure_rows = _rows_for_operation(
+        _failure_rows(failure_labels_by_task),
+        operation,
+        backend,
+    )
+    if not rows and not matching_failure_rows:
         raise ValueError("No benchmark results found in CSV")
 
     # Get unique values
-    operations = _ordered_operations(rows)
-    depths = sorted(set(r["m"] for r in rows))
-    backends = sorted(set(r.get("backend", "") for r in rows))
+    panel_rows = rows + matching_failure_rows
+    operations = _ordered_operations(panel_rows)
+    depths = sorted(set(r["m"] for r in panel_rows))
+    backends = sorted(set(r.get("backend", "") for r in panel_rows))
     operation_norms = _heatmap_color_scales_by_operation(all_rows)
     panels: List[Dict[str, Any]] = []
 
@@ -470,14 +498,13 @@ def make_heatmap_plot(
                         and r.get("backend", "") == backend
                     )
                 ]
-                if not op_rows:
-                    continue
-
                 panel_failures = {
                     task_key: label
                     for task_key, label in failure_labels_by_task.items()
                     if task_key[:3] == (operation, backend, m)
                 }
+                if not op_rows and not panel_failures:
+                    continue
                 series_key_set = set(_series_key(r) for r in op_rows)
                 for failure in panel_failures:
                     library = failure[5]
@@ -491,7 +518,10 @@ def make_heatmap_plot(
                         series_key_set.add(
                             (library, backend, "", "", batch_size)
                         )
-                series_keys = sorted(series_key_set)
+                series_keys = sorted(
+                    series_key_set,
+                    key=lambda key: (key[0] != "pysiglib", key),
+                )
                 libraries = [
                     _series_label(key, include_backend=False)
                     for key in series_keys
@@ -537,7 +567,10 @@ def make_heatmap_plot(
                             if failure_label:
                                 failure_labels[row_idx, col_idx] = failure_label
 
-                norm = operation_norms[operation]
+                norm = operation_norms.get(
+                    operation,
+                    _heatmap_color_scale([]),
+                )
 
                 title_parts = [_operation_label(operation)]
                 if backend:
@@ -613,10 +646,11 @@ def make_heatmap_plot(
             panel["norm"],
             panel["failure_labels"],
         )
-        cbar = fig.colorbar(im, ax=ax, location="right")
-        cbar.formatter = NUMBER_FORMATTER
-        cbar.update_ticks()
-        cbar.set_label("Runtime (ms, log scale)")
+        if np.isfinite(panel["matrix"]).any():
+            cbar = fig.colorbar(im, ax=ax, location="right")
+            cbar.formatter = NUMBER_FORMATTER
+            cbar.update_ticks()
+            cbar.set_label("Runtime (ms, log scale)")
 
     if output_path is None:
         output_path = csv_path.parent / "plot_heatmap.pdf"
@@ -692,8 +726,9 @@ Examples:
         output_dir = run_dir
 
     all_rows = load_results(csv_path)
-    operations = _ordered_operations(all_rows)
-    backends = sorted(set(row.get("backend", "") for row in all_rows))
+    discovery_rows = all_rows + _failure_rows(_load_failure_labels(csv_path))
+    operations = _ordered_operations(discovery_rows)
+    backends = sorted(set(row.get("backend", "") for row in discovery_rows))
     plot_dir = output_dir / "plots" / "heatmap"
     plot_dir.mkdir(parents=True, exist_ok=True)
     print(f"\nGenerating heatmaps by operation and backend in: {plot_dir}\n")
@@ -704,21 +739,22 @@ Examples:
             if not any(
                 row["operation"] == operation
                 and row.get("backend", "") == backend
-                for row in all_rows
+                for row in discovery_rows
             ):
                 continue
-            output_path = plot_dir / (
-                f"{_safe_filename_part(operation)}_"
-                f"{_safe_filename_part(backend)}.pdf"
-            )
             try:
-                make_heatmap_plot(
-                    csv_path,
-                    output_path,
-                    show_titles=not args.no_titles,
-                    operation=operation,
-                    backend=backend,
-                )
+                for suffix in (".pdf", ".png"):
+                    output_path = plot_dir / (
+                        f"{_safe_filename_part(operation)}_"
+                        f"{_safe_filename_part(backend)}{suffix}"
+                    )
+                    make_heatmap_plot(
+                        csv_path,
+                        output_path,
+                        show_titles=not args.no_titles,
+                        operation=operation,
+                        backend=backend,
+                    )
             except Exception as e:
                 failed = True
                 print(

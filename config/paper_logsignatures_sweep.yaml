@@ -2,15 +2,12 @@
 
 libraries:
     - iisignature
-    - roughpy
     - signature-rs
     - log-signatures-pytorch
     - signatory
     - pathsig
     - pysiglib
-    - stochastax
     - signax
-    - tensordev
     - chen-signatures
 
 path_kind: "brownian"
@@ -29,7 +26,7 @@ backends:
     - gpu
 
 batch_size: 256
-repeats: 3
+repeats: 10
 warmup_iterations: 1
 timing_statistic: "min"
 worker_memory_limit_gb: 16

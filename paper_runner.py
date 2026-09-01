@@ -16,6 +16,16 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from orchestrator import run_orchestrator
 
 
+PAPER_SWEEPS = (
+    "paper_signatures_sweep.yaml",
+    "paper_logsignatures_sweep.yaml",
+    "paper_branched_signatures_sweep.yaml",
+    "paper_branched_logsignatures_sweep.yaml",
+    "paper_signature_kernel_sweep.yaml",
+    "paper_polynomial_signature_kernel_sweep.yaml",
+)
+
+
 def run_paper_sweeps(sweep_names: Sequence[str], summary_prefix: str) -> Path:
     started_at = datetime.now().astimezone()
     summary_path = REPO_ROOT / "runs" / (

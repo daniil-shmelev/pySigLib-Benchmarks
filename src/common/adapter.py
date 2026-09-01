@@ -7,7 +7,6 @@ import os
 import statistics
 import sys
 import time
-import tracemalloc
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
@@ -213,7 +212,7 @@ class BenchmarkAdapter:
         Returns:
             Tuple of (summary_time_ms, alloc_bytes, samples_ms):
                 - summary_time_ms: Selected timing statistic in milliseconds
-                - alloc_bytes: Average net traced Python heap change per iteration
+                - alloc_bytes: Reserved compatibility field, always zero
                 - samples_ms: Raw time for every measured iteration
         """
         if warmup_iterations is None:
@@ -279,21 +278,15 @@ class BenchmarkAdapter:
         for iteration in range(warmup_iterations):
             invoke("warmup", iteration)
 
-        # Timed phase with GC disabled and allocation tracking
+        # Timed phase with GC disabled
         gc.disable()
-        tracemalloc.start()
         try:
-            mem0_current, mem0_peak = tracemalloc.get_traced_memory()
-
             samples_ms = []
             for iteration in range(self.repeats):
                 t0 = time.perf_counter()
                 invoke("measured", iteration)
                 samples_ms.append((time.perf_counter() - t0) * 1000.0)
-
-            mem1_current, mem1_peak = tracemalloc.get_traced_memory()
         finally:
-            tracemalloc.stop()
             gc.enable()
 
         if self.timing_statistic == "min":
@@ -301,12 +294,7 @@ class BenchmarkAdapter:
         else:
             summary_time_ms = statistics.median(samples_ms)
 
-        # This tracks only the net Python heap change visible to tracemalloc.
-        # It excludes native allocations, framework pools, and device memory.
-        total_alloc_bytes = mem1_current - mem0_current
-        avg_alloc_bytes = total_alloc_bytes // self.repeats if self.repeats > 0 else 0
-
-        return summary_time_ms, avg_alloc_bytes, samples_ms
+        return summary_time_ms, 0, samples_ms
 
     def _gpu_memory_snapshot(self, reset_peak: bool = False) -> Dict[str, Any]:
         """Read allocator memory statistics for the active GPU framework."""

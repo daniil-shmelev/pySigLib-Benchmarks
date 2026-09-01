@@ -105,15 +105,31 @@ def test_logsignature_backprop_matches_standard_api():
     np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
 
 
-def test_logsignature_method_3_backprop_matches_native_api():
+def test_logsignature_method_3_backprop_matches_native_api(monkeypatch):
     pytest.importorskip("pysiglib")
     config = _config("logsignature_backprop")
     config["log_sig_method"] = 3
     adapter = PySigLibAdapter(config)
     path = make_path(2, 4, "linear")
+    prepare_log_sig = adapter.pysiglib.prepare_log_sig
+    prepare_calls = []
+
+    def checked_prepare_log_sig(*args, **kwargs):
+        prepare_calls.append((args, kwargs))
+        return prepare_log_sig(*args, **kwargs)
+
+    monkeypatch.setattr(
+        adapter.pysiglib,
+        "prepare_log_sig",
+        checked_prepare_log_sig,
+    )
 
     got = np.asarray(adapter.run_logsignature_backprop(path, 2, 2)())
+    assert prepare_calls == [
+        ((2, 2), {"method": 3, "device": "cpu"})
+    ]
     path_array = adapter._path_array(path)
+    prepare_log_sig(2, 2, method=3, device="cpu")
     log_signature = adapter.pysiglib.log_sig(path_array, 2, method=3)
     cotangent = np.asarray(
         adapter.random_cotangent(log_signature.shape),

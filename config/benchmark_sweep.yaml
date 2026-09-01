@@ -30,7 +30,7 @@ backends:
 
 batch_size: 256
 
-repeats: 5
+repeats: 10
 
 logsig_method: "S"
 

@@ -185,6 +185,40 @@ def test_make_heatmap_plot_uses_backend_shared_operation_scale(
     assert captured_limits == [(0.5, 20.0), (0.5, 20.0)]
 
 
+def test_make_heatmap_plot_places_pysiglib_first(tmp_path, monkeypatch):
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(
+        "\n".join([
+            "N,d,m,batch_size,path_kind,operation,backend,language,library,method,path_type,t_ms,alloc_bytes",
+            "1000,2,3,32,brownian,signaturekernel,cpu,python,sigkerax,method,path,10,0",
+            "1000,2,3,32,brownian,signaturekernel,cpu,python,pysiglib,method,path,20,0",
+            "1000,2,3,32,brownian,signaturekernel,cpu,python,sigkernel,method,path,30,0",
+        ]),
+        encoding="utf-8",
+    )
+    captured_libraries = []
+    configure_heatmap_axes = plotting._configure_heatmap_axes
+
+    def capture_libraries(ax, panel, show_titles):
+        captured_libraries.append(panel["libraries"])
+        configure_heatmap_axes(ax, panel, show_titles)
+
+    monkeypatch.setattr(
+        plotting,
+        "_configure_heatmap_axes",
+        capture_libraries,
+    )
+
+    make_heatmap_plot(
+        csv_path,
+        tmp_path / "ordered.pdf",
+        operation="signaturekernel",
+        backend="cpu",
+    )
+
+    assert captured_libraries == [["pysiglib", "sigkerax", "sigkernel"]]
+
+
 def test_annotate_heatmap_labels_oom_failures():
     import matplotlib.pyplot as plt
     import numpy as np
@@ -229,6 +263,20 @@ def test_make_heatmap_plot_saves_one_operation_level_figure(tmp_path):
     assert result_path == output_path
     assert output_path.exists()
     assert not (tmp_path / "plot_heatmaps").exists()
+
+
+def test_failure_labels_do_not_treat_random_errors_as_oom(tmp_path):
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text("", encoding="utf-8")
+    (tmp_path / "failed_tasks.csv").write_text(
+        "\n".join([
+            "task_id,library,backend,operation,N,d,m,batch_size,error_type,reason",
+            "id,pysiglib,cpu,signature,1000,2,3,32,RuntimeError,zoom worker disconnected",
+        ]),
+        encoding="utf-8",
+    )
+
+    assert plotting._load_failure_labels(csv_path) == {}
 
 
 def test_make_heatmap_plot_loads_oom_failures(tmp_path, monkeypatch):
@@ -309,6 +357,61 @@ def test_make_heatmap_plot_includes_oom_only_library(tmp_path, monkeypatch):
 
     assert captured_labels[0].shape == (2, 2)
     assert np.count_nonzero(captured_labels[0] == "OOM") == 2
+
+
+def test_make_heatmap_plot_supports_failure_only_selection(
+    tmp_path,
+    monkeypatch,
+):
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(
+        "\n".join([
+            "N,d,m,batch_size,path_kind,operation,backend,language,library,method,path_type,t_ms,alloc_bytes",
+            "1000,2,3,32,brownian,signaturekernel_backprop,gpu,python,sigkernel,method,path,10,0",
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / "failed_tasks.csv").write_text(
+        "\n".join([
+            "task_id,library,backend,operation,N,d,m,batch_size,error_type,reason",
+            "id1,pysiglib,cpu,signaturekernel_backprop,1000,2,3,32,BenchmarkWorkerOOM,worker received SIGKILL",
+            "id2,pysiglib,cpu,signaturekernel_backprop,1000,4,3,32,BenchmarkWorkerOOM,worker received SIGKILL",
+            "id3,other,cpu,signaturekernel_backprop,1000,2,3,32,BenchmarkWorkerOOM,worker received SIGKILL",
+            "id4,other,cpu,signaturekernel_backprop,1000,4,3,32,BenchmarkWorkerOOM,worker received SIGKILL",
+        ]),
+        encoding="utf-8",
+    )
+    captured = []
+
+    def reject_colorbar(*args, **kwargs):
+        raise AssertionError("Failure-only plot must not show a runtime color bar")
+
+    def capture_labels(
+        ax,
+        matrix,
+        norm,
+        failure_labels=None,
+        fontsize=plotting.HEATMAP_ANNOTATION_FONT_SIZE,
+    ):
+        captured.append((matrix.copy(), failure_labels.copy()))
+
+    monkeypatch.setattr(plotting, "_annotate_heatmap", capture_labels)
+    monkeypatch.setattr(plotting.plt.Figure, "colorbar", reject_colorbar)
+    output_path = tmp_path / "heatmap.pdf"
+
+    make_heatmap_plot(
+        csv_path,
+        output_path,
+        operation="signaturekernel_backprop",
+        backend="cpu",
+    )
+
+    assert output_path.exists()
+    assert len(captured) == 1
+    matrix, labels = captured[0]
+    assert matrix.shape == (2, 2)
+    assert np.isnan(matrix).all()
+    assert np.count_nonzero(labels == "OOM") == 4
 
 
 def test_make_heatmap_plot_labels_cuda_tree_launch_limit(tmp_path, monkeypatch):
@@ -392,7 +495,7 @@ def test_make_heatmap_plot_labels_worker_segfault_as_crash(tmp_path, monkeypatch
     assert np.count_nonzero(captured_labels[0] == "Crash") == 1
 
 
-def test_make_heatmap_plot_classifies_log_signatures_pytorch_cuda_errors(
+def test_make_heatmap_plot_classifies_only_known_cuda_limits(
     tmp_path,
     monkeypatch,
 ):
@@ -434,7 +537,7 @@ def test_make_heatmap_plot_classifies_log_signatures_pytorch_cuda_errors(
     )
 
     all_labels = np.concatenate([labels.ravel() for labels in captured_labels])
-    assert np.count_nonzero(all_labels == "OOM") == 1
+    assert np.count_nonzero(all_labels == "OOM") == 0
     assert (
         np.count_nonzero(
             all_labels == "CUDA\nLIMIT"

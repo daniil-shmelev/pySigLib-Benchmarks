@@ -26,18 +26,28 @@ class PolySigKernelAdapter(BenchmarkAdapter):
 
         self.jax = jax
         self.jnp = jnp
+        self.dtype_name = str(config.get("dtype", "float32"))
+        if self.dtype_name == "float32":
+            self.numpy_dtype = np.float32
+            self.jax_dtype = jnp.float32
+        elif self.dtype_name == "float64":
+            jax.config.update("jax_enable_x64", True)
+            self.numpy_dtype = np.float64
+            self.jax_dtype = jnp.float64
+        else:
+            raise ValueError(f"Unsupported dtype: {self.dtype_name}")
         self.SigKernel_polynomial = SigKernel_polynomial
         self.solver = config.get("sig_kernel_solver", "monomial_approx")
 
     def _path_batch(self, path: np.ndarray):
         """Convert path data to a rank-3 JAX array during setup."""
-        path_np = np.ascontiguousarray(path, dtype=np.float32)
+        path_np = np.ascontiguousarray(path, dtype=self.numpy_dtype)
         if path_np.ndim == 2:
             path_np = path_np[None, :, :]
         return self.cached_prepared_input(
-            "polysigkernel.jax",
+            f"polysigkernel.jax.{self.dtype_name}",
             path,
-            lambda: self.jnp.asarray(path_np, dtype=self.jnp.float32),
+            lambda: self.jnp.asarray(path_np, dtype=self.jax_dtype),
         )
 
     def run_signaturekernel(
@@ -143,7 +153,7 @@ class PolySigKernelAdapter(BenchmarkAdapter):
                 method_prefix
                 +
                 f"(order={int(self.config.get('sig_kernel_order', self.m))}, "
-                f"solver={self.solver})"
+                f"solver={self.solver}, dtype={self.dtype_name})"
             ),
             path_type="jax.Array",
             language="python",

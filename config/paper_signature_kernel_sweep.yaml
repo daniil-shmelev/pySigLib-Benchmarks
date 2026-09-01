@@ -2,7 +2,6 @@
 
 libraries:
     - pysiglib
-    - polysigkernel
     - sigkerax
     - sigkernel
 
@@ -22,28 +21,41 @@ backends:
     - gpu
 
 batch_size: 32
-repeats: 3
+repeats: 10
 warmup_iterations: 1
 timing_statistic: "min"
 worker_memory_limit_gb: 16
 clear_input_caches_after_task: true
 
-sig_kernel_solver: "monomial_approx"
+sig_kernel_method: "finite_difference"
 sig_kernel_max_batch: -1
 
 library_configs:
-    polysigkernel:
-        sig_kernel_order: 3
     sigkerax:
         sig_kernel_refinement_factor: 1
+        backend_configs:
+            cpu:
+                dtype: "float64"
+            gpu:
+                dtype: "float32"
     # CUDA supports fewer than 1024 refined path intervals in sigkernel.
     sigkernel:
         sig_kernel_dyadic_order: 0
         sig_kernel_max_batch: 4
-    pysiglib:
-        sig_kernel_dyadic_order: 1
         backend_configs:
             cpu:
+                dtype: "float64"
+            gpu:
+                dtype: "float32"
+    pysiglib:
+        sig_kernel_method: "finite_difference"
+        sig_kernel_dyadic_order: 0
+        sig_kernel_max_batch: 4
+        backend_configs:
+            cpu:
+                dtype: "float64"
                 n_jobs: -1
+            gpu:
+                dtype: "float32"
 
 runs_dir: "runs"
