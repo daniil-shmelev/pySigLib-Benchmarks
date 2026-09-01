@@ -198,6 +198,7 @@ def write_csv(
     overall_ranks: dict[tuple[str, str], int],
     coverage: dict[tuple[str, str], int],
 ) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = ["Package"]
     for _, _, label in BENCHMARKS:
         fieldnames.extend([f"{label} CPU", f"{label} GPU"])
@@ -241,6 +242,7 @@ def write_latex(
     overall_ranks: dict[tuple[str, str], int],
     coverage: dict[tuple[str, str], int],
 ) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     family_ranks: dict[tuple[str, str, str], int] = {}
     for backend in BACKENDS:
         for family_label, operations in FAMILIES:
@@ -323,7 +325,7 @@ def main() -> None:
     parser.add_argument(
         "--tex-output",
         type=Path,
-        default=REPO_ROOT / "benchmark_rank_table.tex",
+        default=REPO_ROOT / "runs" / "benchmark_rank_table.tex",
     )
     args = parser.parse_args()
 
