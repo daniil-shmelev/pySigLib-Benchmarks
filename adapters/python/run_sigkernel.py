@@ -137,16 +137,38 @@ class SigkernelAdapter(BenchmarkAdapter):
 
         return gradient
 
+    def run_signaturekernel_fwd_bwd(self, path1, path2, d, m) -> Callable:
+        X = self._path_tensor(path1, requires_grad=True)
+        Y = self._path_tensor(path2)
+        signature_kernel = self._signature_kernel()
+        max_batch = self._max_batch(X, Y)
+        cotangent = self.torch.as_tensor(
+            self.random_cotangent((X.shape[0], Y.shape[0])),
+            dtype=X.dtype, device=X.device,
+        )
+
+        def kernel():
+            # compute_Gram also prepares derivatives: it must be timed here.
+            output = signature_kernel.compute_Gram(X, Y, sym=False, max_batch=max_batch)
+            gradient, = self.torch.autograd.grad(output, X, cotangent)
+            return self._synchronize((output, gradient))
+
+        return kernel
+
     def _run_benchmark(self) -> dict[str, Any] | None:
         if self.operation not in (
             "signaturekernel",
             "signaturekernel_backprop",
+            "signaturekernel_fwd_bwd",
         ):
             return None
 
         path1 = self.make_path_input()
         path2 = self.make_path_input()
-        if self.operation == "signaturekernel_backprop":
+        if self.operation == "signaturekernel_fwd_bwd":
+            kernel = self.run_signaturekernel_fwd_bwd(path1, path2, self.d, self.m)
+            method_prefix = "forward+backward(SigKernel.compute_Gram)"
+        elif self.operation == "signaturekernel_backprop":
             kernel = self.run_signaturekernel_backprop(
                 path1,
                 path2,

@@ -20,7 +20,7 @@ Ds: [2, 4, 8, 16]
 Ms: [3]
 
 operations:
-    - signaturekernel
+    - signaturekernel_fwd_bwd
 
 # Backend labels defined per library in libraries_registry.yaml.
 # Use [cpu], [gpu], or [cpu, gpu] to choose the experiment scope.

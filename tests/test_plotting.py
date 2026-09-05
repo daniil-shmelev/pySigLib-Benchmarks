@@ -28,6 +28,22 @@ from plotting import (
 )
 
 
+def test_timeout_failures_are_labelled_in_heatmaps(tmp_path):
+    (tmp_path / "failed_tasks.csv").write_text(
+        "task_id,library,backend,operation,N,d,m,batch_size,error_type,reason\n"
+        "id1,log-signatures-pytorch,gpu,logsignature,1000,16,3,256,BenchmarkTaskTimeout,task exceeded 120 seconds\n",
+        encoding="utf-8",
+    )
+    labels = plotting._load_failure_labels(tmp_path / "results.csv")
+    assert labels == {
+        ("logsignature", "gpu", 3, 1000, 16, "log-signatures-pytorch", 256): "Timeout",
+    }
+
+
+def test_kernel_training_step_has_unambiguous_label():
+    assert plotting._operation_label("signaturekernel_fwd_bwd") == "Signature kernel forward + backward"
+
+
 def test_format_number_avoids_scientific_notation():
     assert _format_number(0.0264) == "0.0264"
     assert _format_number(170.0) == "170"

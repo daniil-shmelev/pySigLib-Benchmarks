@@ -31,6 +31,7 @@ def test_pathsig_is_registered_as_gpu_only():
 
     config = registry["libraries"]["pathsig"]
     assert config["backend"] == "gpu"
+    assert config["env"]["NVCC_APPEND_FLAGS"] == "--std=c++20"
     assert config["operations"] == [
         "signature",
         "logsignature",

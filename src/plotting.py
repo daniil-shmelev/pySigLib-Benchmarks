@@ -83,6 +83,7 @@ def _operation_label(operation: str) -> str:
         "branchedlogsignature_planar_backprop": "Planar branched log signature backprop",
         "signaturekernel": "Signature kernel",
         "signaturekernel_backprop": "Signature kernel backprop",
+        "signaturekernel_fwd_bwd": "Signature kernel forward + backward",
     }
     return labels.get(operation, operation.replace("_", " ").capitalize())
 
@@ -157,6 +158,7 @@ def _ordered_operations(rows: List[Dict[str, Any]]) -> List[str]:
         "branchedlogsignature_planar_backprop",
         "signaturekernel",
         "signaturekernel_backprop",
+        "signaturekernel_fwd_bwd",
     ]
     return [op for op in preferred if op in observed] + sorted(observed - set(preferred))
 
@@ -381,6 +383,8 @@ def _load_failure_labels(
                 )
                 if is_oom_failure(error_type, reason):
                     failure_label = "OOM"
+                elif error_type in {"BenchmarkTaskTimeout", "BenchmarkCallTimeout"}:
+                    failure_label = "Timeout"
                 elif "worker exited with code 139" in error_text:
                     failure_label = "Crash"
                 elif (
@@ -692,6 +696,8 @@ Examples:
         action="store_true",
         help="Disable subplot titles",
     )
+    parser.add_argument("--plot-dir", type=Path, help="Exact destination directory for heatmaps")
+    parser.add_argument("--filename-prefix", default="", help="Prefix distinguishing sweeps in a shared plot directory")
     args = parser.parse_args()
 
     if args.run_dir:
@@ -729,7 +735,7 @@ Examples:
     discovery_rows = all_rows + _failure_rows(_load_failure_labels(csv_path))
     operations = _ordered_operations(discovery_rows)
     backends = sorted(set(row.get("backend", "") for row in discovery_rows))
-    plot_dir = output_dir / "plots" / "heatmap"
+    plot_dir = args.plot_dir if args.plot_dir is not None else output_dir / "plots" / "heatmap"
     plot_dir.mkdir(parents=True, exist_ok=True)
     print(f"\nGenerating heatmaps by operation and backend in: {plot_dir}\n")
 
@@ -745,7 +751,7 @@ Examples:
             try:
                 for suffix in (".pdf", ".png"):
                     output_path = plot_dir / (
-                        f"{_safe_filename_part(operation)}_"
+                        f"{args.filename_prefix}{_safe_filename_part(operation)}_"
                         f"{_safe_filename_part(backend)}{suffix}"
                     )
                     make_heatmap_plot(

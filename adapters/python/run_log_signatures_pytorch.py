@@ -27,6 +27,28 @@ class LogSignaturesPyTorchAdapter(BenchmarkAdapter):
         self.torch = torch
         self.signature = signature
         self.log_signature = log_signature
+        self.logsignature_method = str(
+            config.get("log_signature_method", "default")
+        )
+        self.logsignature_mode = str(
+            config.get("log_signature_mode", "words")
+        )
+        if self.logsignature_method not in {"default", "bch_sparse"}:
+            raise ValueError(
+                "log_signature_method must be 'default' or 'bch_sparse'"
+            )
+        if self.logsignature_mode not in {"words", "hall"}:
+            raise ValueError(
+                "log_signature_mode must be 'words' or 'hall'"
+            )
+        if (
+            self.logsignature_method == "bch_sparse"
+            and self.logsignature_mode != "hall"
+        ):
+            raise ValueError(
+                "log_signature_method='bch_sparse' requires "
+                "log_signature_mode='hall'"
+            )
 
     def _path_tensor(self, path: np.ndarray):
         if self.backend == "gpu":
@@ -70,8 +92,8 @@ class LogSignaturesPyTorchAdapter(BenchmarkAdapter):
             lambda path_arg: self.log_signature(
                 path_arg,
                 depth=m,
-                method="default",
-                mode="words",
+                method=self.logsignature_method,
+                mode=self.logsignature_mode,
             ),
             path,
         )
@@ -98,8 +120,8 @@ class LogSignaturesPyTorchAdapter(BenchmarkAdapter):
             return self.log_signature(
                 path_arg,
                 depth=m,
-                method="default",
-                mode="words",
+                method=self.logsignature_method,
+                mode=self.logsignature_mode,
             )
 
         output, pullback = self.torch.func.vjp(logsignature_fn, path)
@@ -117,13 +139,19 @@ class LogSignaturesPyTorchAdapter(BenchmarkAdapter):
             method = "signature"
         elif self.operation == "logsignature":
             kernel = self.run_logsignature(path, self.d, self.m)
-            method = "log_signature(default,words)"
+            method = (
+                f"log_signature({self.logsignature_method},"
+                f"{self.logsignature_mode})"
+            )
         elif self.operation == "sig_backprop":
             kernel = self.run_sig_backprop(path, self.d, self.m)
             method = "torch.func.vjp(signature)"
         elif self.operation == "logsignature_backprop":
             kernel = self.run_logsignature_backprop(path, self.d, self.m)
-            method = "torch.func.vjp(log_signature(default,words))"
+            method = (
+                "torch.func.vjp(log_signature("
+                f"{self.logsignature_method},{self.logsignature_mode}))"
+            )
         else:
             return None
 

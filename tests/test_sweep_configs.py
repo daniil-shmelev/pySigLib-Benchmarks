@@ -20,7 +20,7 @@ SIGNATURE_OPERATIONS = {
     "branchedlogsignature_nonplanar",
     "branchedlogsignature_planar",
 }
-KERNEL_OPERATIONS = {"signaturekernel"}
+KERNEL_OPERATIONS = {"signaturekernel_fwd_bwd"}
 BACKPROP_OPERATIONS = {
     "sig_backprop",
     "logsignature_backprop",
@@ -28,7 +28,6 @@ BACKPROP_OPERATIONS = {
     "branchedsignature_planar_backprop",
     "branchedlogsignature_nonplanar_backprop",
     "branchedlogsignature_planar_backprop",
-    "signaturekernel_backprop",
 }
 PAPER_SIGNATURE_LIBRARIES = {
     "iisignature",
@@ -41,10 +40,16 @@ PAPER_SIGNATURE_LIBRARIES = {
     "keras_sig",
     "chen-signatures",
 }
-PAPER_LOGSIGNATURE_LIBRARIES = (
-    PAPER_SIGNATURE_LIBRARIES
-    | {"signature-rs"}
-) - {"keras_sig", "tensordev"}
+PAPER_LOGSIGNATURE_LIBRARIES = PAPER_SIGNATURE_LIBRARIES - {
+    "keras_sig",
+    "tensordev",
+}
+PAPER_BCH_LOGSIGNATURE_LIBRARIES = {
+    "iisignature",
+    "signature-rs",
+    "log-signatures-pytorch",
+    "pysiglib",
+}
 PAPER_BRANCHED_LIBRARIES = {"pysiglib", "stochastax"}
 PAPER_FINITE_DIFFERENCE_KERNEL_LIBRARIES = {
     "pysiglib",
@@ -97,6 +102,7 @@ def test_combined_runner_runs_only_paper_heatmap_sweeps():
     assert run_benchmarks.PAPER_SWEEPS == (
         "paper_signatures_sweep.yaml",
         "paper_logsignatures_sweep.yaml",
+        "paper_bch_logsignatures_sweep.yaml",
         "paper_branched_signatures_sweep.yaml",
         "paper_branched_logsignatures_sweep.yaml",
         "paper_signature_kernel_sweep.yaml",
@@ -138,13 +144,26 @@ def test_pysiglib_uses_the_local_source_checkout():
     assert sources["pysiglib-cuda"] == {
         "path": "../pySigLib/plugins/cuda"
     }
+    optional_dependencies = project["project"]["optional-dependencies"]
+    assert "pysiglib[cuda]" in optional_dependencies["pysiglib"]
+    assert "pysiglib[cuda]" in optional_dependencies["all"]
+    assert not any(
+        dependency.startswith("pysiglib-cuda")
+        for dependency in project["tool"]["uv"]["constraint-dependencies"]
+    )
 
 
-def test_runtime_sweeps_use_at_least_ten_repetitions():
+def test_runtime_sweeps_use_expected_repetitions():
     for config_path in CONFIG_DIR.glob("*.yaml"):
         config = _load_yaml(config_path.name)
         if "repeats" in config:
-            assert config["repeats"] >= 10
+            if config_path.name in {
+                "paper_signature_kernel_sweep.yaml",
+                "paper_polynomial_signature_kernel_sweep.yaml",
+            }:
+                assert config["repeats"] == 3
+            else:
+                assert config["repeats"] >= 10
 
 
 def _assert_paper_settings(
@@ -153,6 +172,7 @@ def _assert_paper_settings(
     expected_N: int = 1000,
     expected_Ms: tuple[int, ...] = (2, 3),
     expected_batch_size: int = 256,
+    expected_repeats: int = 10,
 ) -> None:
     assert paper["path_kind"] == "brownian"
     assert paper["seed"] == 20260529
@@ -161,7 +181,7 @@ def _assert_paper_settings(
     assert paper["Ms"] == list(expected_Ms)
     assert paper["backends"] == ["cpu", "gpu"]
     assert paper["batch_size"] == expected_batch_size
-    assert paper["repeats"] == 10
+    assert paper["repeats"] == expected_repeats
     assert paper["warmup_iterations"] == 1
     assert paper["timing_statistic"] == "min"
     assert paper["worker_memory_limit_gb"] == 16
@@ -172,6 +192,7 @@ def _assert_paper_settings(
 def test_problem_specific_paper_sweeps():
     signatures = _load_yaml("paper_signatures_sweep.yaml")
     logsignatures = _load_yaml("paper_logsignatures_sweep.yaml")
+    bch_logsignatures = _load_yaml("paper_bch_logsignatures_sweep.yaml")
     branched = _load_yaml("paper_branched_signatures_sweep.yaml")
     branched_logsignatures = _load_yaml(
         "paper_branched_logsignatures_sweep.yaml"
@@ -182,17 +203,24 @@ def test_problem_specific_paper_sweeps():
     )
 
     _assert_paper_settings(signatures, expected_N=10000)
-    for paper in (logsignatures, branched, branched_logsignatures):
+    for paper in (
+        logsignatures,
+        bch_logsignatures,
+        branched,
+        branched_logsignatures,
+    ):
         _assert_paper_settings(paper)
     _assert_paper_settings(
         kernels,
         expected_Ms=(3,),
         expected_batch_size=32,
+        expected_repeats=3,
     )
     _assert_paper_settings(
         polynomial_kernels,
         expected_Ms=(3,),
         expected_batch_size=32,
+        expected_repeats=3,
     )
 
     assert set(signatures["libraries"]) == PAPER_SIGNATURE_LIBRARIES
@@ -204,6 +232,32 @@ def test_problem_specific_paper_sweeps():
     assert set(logsignatures["operations"]) == {
         "logsignature",
         "logsignature_backprop",
+    }
+    assert set(bch_logsignatures["libraries"]) == (
+        PAPER_BCH_LOGSIGNATURE_LIBRARIES
+    )
+    assert set(bch_logsignatures["operations"]) == {
+        "logsignature",
+        "logsignature_backprop",
+    }
+    assert logsignatures["library_configs"]["iisignature"][
+        "logsig_method"
+    ] == "S"
+    assert logsignatures["library_configs"]["pysiglib"][
+        "log_sig_method"
+    ] == 2
+    assert bch_logsignatures["library_configs"]["iisignature"][
+        "logsig_method"
+    ] == "C"
+    assert bch_logsignatures["task_timeout_seconds"] == 120
+    assert bch_logsignatures["library_configs"]["pysiglib"][
+        "log_sig_method"
+    ] == 3
+    assert bch_logsignatures["library_configs"][
+        "log-signatures-pytorch"
+    ] == {
+        "log_signature_method": "bch_sparse",
+        "log_signature_mode": "hall",
     }
     assert set(branched["libraries"]) == PAPER_BRANCHED_LIBRARIES
     assert set(branched["operations"]) == {
@@ -223,15 +277,13 @@ def test_problem_specific_paper_sweeps():
         PAPER_FINITE_DIFFERENCE_KERNEL_LIBRARIES
     )
     assert set(kernels["operations"]) == {
-        "signaturekernel",
-        "signaturekernel_backprop",
+        "signaturekernel_fwd_bwd",
     }
     assert set(polynomial_kernels["libraries"]) == (
         PAPER_POLYNOMIAL_KERNEL_LIBRARIES
     )
     assert set(polynomial_kernels["operations"]) == {
-        "signaturekernel",
-        "signaturekernel_backprop",
+        "signaturekernel_fwd_bwd",
     }
     assert kernels["library_configs"]["sigkerax"][
         "sig_kernel_refinement_factor"
@@ -268,6 +320,7 @@ def test_problem_specific_paper_sweeps():
     for paper in (
         signatures,
         logsignatures,
+        bch_logsignatures,
         branched,
         branched_logsignatures,
         kernels,

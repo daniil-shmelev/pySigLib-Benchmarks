@@ -19,6 +19,7 @@ from orchestrator import run_orchestrator
 PAPER_SWEEPS = (
     "paper_signatures_sweep.yaml",
     "paper_logsignatures_sweep.yaml",
+    "paper_bch_logsignatures_sweep.yaml",
     "paper_branched_signatures_sweep.yaml",
     "paper_branched_logsignatures_sweep.yaml",
     "paper_signature_kernel_sweep.yaml",
@@ -26,38 +27,73 @@ PAPER_SWEEPS = (
 )
 
 
-def run_paper_sweeps(sweep_names: Sequence[str], summary_prefix: str) -> Path:
-    started_at = datetime.now().astimezone()
-    summary_path = REPO_ROOT / "runs" / (
-        f"{summary_prefix}_{started_at.strftime('%Y%m%d_%H%M%S')}.json"
-    )
-    benchmark_started = time.monotonic()
-    result_paths = [
-        run_orchestrator(REPO_ROOT / "config" / sweep_name)
-        for sweep_name in sweep_names
-    ]
-    benchmark_wall_time = time.monotonic() - benchmark_started
+def run_paper_sweeps(
+    sweep_names: Sequence[str],
+    summary_prefix: str,
+    *,
+    resume_dir: Path | None = None,
+    retry_failed: bool = False,
+    plots_only: bool = False,
+    retry_exclude_libraries: Sequence[str] = (),
+) -> Path:
+    """Keep one benchmark's plots and named sweep data in a single directory."""
+    if (retry_failed or plots_only) and resume_dir is None:
+        raise ValueError("Retrying or plotting an existing benchmark requires --resume")
+    if retry_failed and plots_only:
+        raise ValueError("--retry-failed and --plots-only cannot be combined")
+    if retry_exclude_libraries and not retry_failed:
+        raise ValueError("--retry-exclude-library requires --retry-failed")
+    if resume_dir is None:
+        started_at = datetime.now().astimezone()
+        group_dir = REPO_ROOT / "runs" / f"{summary_prefix}_{started_at:%Y%m%d_%H%M%S}"
+        group_dir.mkdir(parents=True, exist_ok=False)
+        summary = {
+            "started_at": started_at.isoformat(),
+            "sweep_configs": list(sweep_names),
+            "run_directories": [
+                f"data/{Path(name).stem.removeprefix('paper_').removesuffix('_sweep')}"
+                for name in sweep_names
+            ],
+        }
+    else:
+        group_dir = resume_dir.resolve()
+        summary = json.loads((group_dir / "summary.json").read_text(encoding="utf-8"))
+    summary_path = group_dir / "summary.json"
 
-    summary = {
-        "status": "plotting",
-        "started_at": started_at.isoformat(),
-        "benchmark_completed_at": datetime.now().astimezone().isoformat(),
-        "benchmark_wall_time_seconds": benchmark_wall_time,
-        "sweep_configs": list(sweep_names),
-        "run_directories": [str(path.parent) for path in result_paths],
-    }
-    summary_path.write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    def save_summary():
+        summary_path.write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+        )
+
+    if not plots_only:
+        summary["status"] = "benchmarking"
+        save_summary()
+        benchmark_started = time.monotonic()
+        for sweep_name, relative_dir in zip(summary["sweep_configs"], summary["run_directories"], strict=True):
+            run_dir = group_dir / relative_dir
+            if run_dir.exists():
+                run_orchestrator(
+                    resume_dir=run_dir, retry_failed=retry_failed,
+                    retry_exclude_libraries=retry_exclude_libraries,
+                )
+            else:
+                run_orchestrator(REPO_ROOT / "config" / sweep_name, output_dir=run_dir)
+        summary["benchmark_wall_time_seconds"] = summary.get("benchmark_wall_time_seconds", 0) + time.monotonic() - benchmark_started
+        summary["benchmark_completed_at"] = datetime.now().astimezone().isoformat()
+
+    summary["status"] = "plotting"
+    save_summary()
 
     plot_started = time.monotonic()
-    for result_path in result_paths:
+    for relative_dir in summary["run_directories"]:
+        run_dir = group_dir / relative_dir
         subprocess.run(
             [
                 sys.executable,
                 str(REPO_ROOT / "src" / "plotting.py"),
-                str(result_path.parent),
+                str(run_dir),
+                "--plot-dir", str(group_dir / "plots"),
+                "--filename-prefix", run_dir.name + "_",
             ],
             cwd=REPO_ROOT,
             check=True,
@@ -67,12 +103,10 @@ def run_paper_sweeps(sweep_names: Sequence[str], summary_prefix: str) -> Path:
     summary.update({
         "status": "complete",
         "completed_at": datetime.now().astimezone().isoformat(),
-        "plot_wall_time_seconds": plot_wall_time,
-        "total_wall_time_seconds": time.monotonic() - benchmark_started,
+        "plot_wall_time_seconds": summary.get("plot_wall_time_seconds", 0) + plot_wall_time,
     })
-    summary_path.write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    print(f"Paper benchmark summary written to: {summary_path}")
+    summary["total_wall_time_seconds"] = summary.get("benchmark_wall_time_seconds", 0) + summary["plot_wall_time_seconds"]
+    save_summary()
+    print(f"Benchmark directory: {group_dir}")
+    print(f"All plots: {group_dir / 'plots'}")
     return summary_path

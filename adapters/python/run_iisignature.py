@@ -66,6 +66,11 @@ class IISignatureAdapter(BenchmarkAdapter):
     ) -> Optional[Callable]:
         if d < 2:
             return None
+        if not set(str(self.logsig_method).upper()) & {"S", "A", "X"}:
+            # iisignature's direct BCH methods C and O have no backward API.
+            raise NotImplementedError(
+                "iisignature BCH logsignature backprop is unsupported"
+            )
         path = np.ascontiguousarray(path, dtype=np.float32)
         basis = self.iisignature.prepare(d, m, self.logsig_method)
         output = self.iisignature.logsig(path, basis, self.logsig_method)

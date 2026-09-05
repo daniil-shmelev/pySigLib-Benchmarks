@@ -74,6 +74,8 @@ libraries:
     env:
       CMAKE_ARGS: "-DCUDA_nvrtc_LIBRARY={repo_root}/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libnvrtc.so.13"
       TORCH_CUDA_ARCH_LIST: "12.0"
+      # Avoid the NVCC/GCC 15 dependent-type error in PyTorch's C++17 headers.
+      NVCC_APPEND_FLAGS: "--std=c++20"
     operations:
       - signature
       - logsignature
@@ -102,8 +104,7 @@ libraries:
       - branchedlogsignature_planar
       - branchedlogsignature_nonplanar_backprop
       - branchedlogsignature_planar_backprop
-      - signaturekernel
-      - signaturekernel_backprop
+      - signaturekernel_fwd_bwd
 
   polysigkernel:
     type: python
@@ -120,8 +121,7 @@ libraries:
         env:
           JAX_PLATFORM_NAME: gpu
     operations:
-      - signaturekernel
-      - signaturekernel_backprop
+      - signaturekernel_fwd_bwd
 
   sigkerax:
     type: python
@@ -142,8 +142,7 @@ libraries:
         env:
           JAX_PLATFORM_NAME: gpu
     operations:
-      - signaturekernel
-      - signaturekernel_backprop
+      - signaturekernel_fwd_bwd
 
   sigkernel:
     type: python
@@ -157,8 +156,7 @@ libraries:
         env:
           NUMBA_CUDA_DRIVER: "/usr/lib/wsl/lib/libcuda.so.1"
     operations:
-      - signaturekernel
-      - signaturekernel_backprop
+      - signaturekernel_fwd_bwd
 
   stochastax:
     type: python

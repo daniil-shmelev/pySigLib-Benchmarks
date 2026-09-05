@@ -124,16 +124,37 @@ class SigkeraxAdapter(BenchmarkAdapter):
         )
         return lambda: backprop_fn(cotangent).block_until_ready()
 
+    def run_signaturekernel_fwd_bwd(self, path1, path2, d, m) -> Callable:
+        X, Y = self._path_batch(path1), self._path_batch(path2)
+        signature_kernel = self._signature_kernel()
+        cotangent = self.jnp.asarray(
+            self.random_cotangent((X.shape[0], Y.shape[0])), dtype=X.dtype,
+        )
+
+        @self.jax.jit
+        def step(X_arg, Y_arg, cotangent_arg):
+            output, pullback = self.jax.vjp(
+                lambda x: signature_kernel.kernel_matrix(x, Y_arg)[..., 0], X_arg,
+            )
+            return output, pullback(cotangent_arg)[0]
+
+        # Dynamic arguments prevent compiling a cached gradient for fixed inputs.
+        return lambda: self.jax.block_until_ready(step(X, Y, cotangent))
+
     def _run_benchmark(self) -> dict[str, Any] | None:
         if self.operation not in (
             "signaturekernel",
             "signaturekernel_backprop",
+            "signaturekernel_fwd_bwd",
         ):
             return None
 
         path1 = self.make_path_input()
         path2 = self.make_path_input()
-        if self.operation == "signaturekernel_backprop":
+        if self.operation == "signaturekernel_fwd_bwd":
+            kernel = self.run_signaturekernel_fwd_bwd(path1, path2, self.d, self.m)
+            method_prefix = "forward+backward(SigKernel.kernel_matrix)"
+        elif self.operation == "signaturekernel_backprop":
             kernel = self.run_signaturekernel_backprop(
                 path1,
                 path2,

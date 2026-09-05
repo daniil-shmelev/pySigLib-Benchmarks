@@ -12,8 +12,7 @@ Ds: [2, 4, 8, 16]
 Ms: [3]
 
 operations:
-    - signaturekernel
-    - signaturekernel_backprop
+    - signaturekernel_fwd_bwd
 
 backends:
     - cpu

@@ -7,9 +7,7 @@ The suite measures steady-state `float32` kernel latency. Compilation, process
 startup, path generation, and input conversion are outside the timed region.
 Batched timings cover the complete batch, not one path.
 
-Sweeps default to three untimed warmup iterations. The paper benchmark uses
-one warmup, ten measured calls, and reports the minimum measured runtime.
-The signature paper sweep uses `N=10000`; the other paper sweeps use `N=1000`.
+Sweeps default to three untimed warmup iterations. The paper runtime benchmarks use one warmup and report the minimum measured runtime: the finite-difference and polynomial signature-kernel sweeps use three measured calls, while the other paper runtime sweeps use ten. The signature paper sweep uses `N=10000`; the other paper runtime sweeps use `N=1000`.
 
 ## Quick start
 
@@ -35,9 +33,7 @@ uv run --reinstall-package pysiglib --reinstall-package pysiglib-cuda \
   run_benchmarks.py
 ```
 
-This command runs only the six paper sweep configurations. The finite-difference
-and polynomial kernel sweeps use separate run directories and generate separate
-heatmaps.
+This command runs the seven paper sweep configurations inside one benchmark directory. Signature-to-log, direct-BCH, finite-difference and polynomial comparisons remain separate heatmaps, all collected in the same `plots/` folder.
 
 Run every problem-specific paper benchmark:
 
@@ -76,8 +72,21 @@ report allocator memory from PyTorch or JAX. Resume an interrupted run with
 Use `uv run src/memory_benchmark.py config/memory_smoke.yaml` for a minimal
 CPU smoke test.
 
-Each runner records benchmark and plotting wall time in a JSON summary under
-`runs/` and generates heatmaps for its result directory.
+Each paper runner creates one directory under `runs/`, with all heatmaps together in `plots/`, named sweep data under `data/`, and timings and sweep locations in `summary.json`. Plot filenames distinguish regular and BCH methods so they cannot overwrite each other.
+
+Resume the entire benchmark and retry failures (successful cases are retained, and all plots are regenerated afterward):
+
+```bash
+uv run run_benchmarks.py --resume runs/combined_benchmark_TIMESTAMP --retry-failed
+```
+
+To leave a library's failures untouched, add `--retry-exclude-library log-signatures-pytorch`. This option can be repeated for multiple libraries.
+
+Regenerate all plots without running benchmarks:
+
+```bash
+uv run run_benchmarks.py --resume runs/combined_benchmark_TIMESTAMP --plots-only
+```
 
 Run a sweep with a saved or restricted library registry:
 
@@ -87,10 +96,18 @@ uv run src/orchestrator.py \
     config/benchmark_sweep.yaml
 ```
 
-Resume an interrupted run:
+For a standalone sweep (or one named sweep directory under `data/`), use the lower-level orchestrator:
 
 ```bash
 uv run src/orchestrator.py --resume runs/benchmark_TIMESTAMP
+```
+
+To retry failed cases in a fixed-grid run after fixing their cause, add `--retry-failed`. Successful cases are retained, and previous failure records are backed up inside the run directory. Stop the original run before resuming it.
+
+The BCH sweep limits each Python benchmark case to 120 seconds via `task_timeout_seconds`, including input preparation, compilation, warmup and repeats, but excluding dependency installation and worker startup. Timed-out cases are recorded as failures and labelled `Timeout` in heatmaps. Resuming uses the saved `benchmark_sweep.yaml` inside the run directory; add `task_timeout_seconds: 120` there to apply this limit to an older run after stopping it.
+
+```bash
+CUDACXX=/usr/local/cuda/bin/nvcc uv run src/orchestrator.py --resume runs/benchmark_TIMESTAMP --retry-failed
 ```
 
 Generate heatmaps from a run:
@@ -105,11 +122,12 @@ uv run src/plotting.py runs/benchmark_TIMESTAMP
 | --- | --- | ---: | ---: |
 | `config/benchmark_sweep.yaml` | Signature family; `N=256,512,1024`, `d=2,4,8,16`, `m=2,3` | 256 | 10 |
 | `config/paper_signatures_sweep.yaml` | Forward signatures and `sig_backprop`; `N=10000` | 256 | 10 |
-| `config/paper_logsignatures_sweep.yaml` | Forward log-signatures and backprop; `N=1000` | 256 | 10 |
+| `config/paper_logsignatures_sweep.yaml` | Signature-to-log methods and backprop; `N=1000` | 256 | 10 |
+| `config/paper_bch_logsignatures_sweep.yaml` | Direct BCH methods and available backprop; `N=1000` | 256 | 10 |
 | `config/paper_branched_signatures_sweep.yaml` | Forward planar/non-planar branched signatures and backprop; `N=1000` | 256 | 10 |
 | `config/paper_branched_logsignatures_sweep.yaml` | Forward planar/non-planar branched log-signatures and backprop; `N=1000` | 256 | 10 |
-| `config/paper_signature_kernel_sweep.yaml` | Finite-difference signature kernels and backprop; `N=1000` | 32 x 32 | 10 |
-| `config/paper_polynomial_signature_kernel_sweep.yaml` | Polynomial signature kernels and backprop; `N=1000` | 32 x 32 | 10 |
+| `config/paper_signature_kernel_sweep.yaml` | Finite-difference signature kernels, forward + backward; `N=1000` | 32 x 32 | 3 |
+| `config/paper_polynomial_signature_kernel_sweep.yaml` | Polynomial signature kernels, forward + backward; `N=1000` | 32 x 32 | 3 |
 | `config/signature_kernel_sweep.yaml` | Finite-difference signature kernels; `N=200,400,800`, `d=2,4,8,16` | 32 x 32 | 10 |
 | `config/polynomial_signature_kernel_sweep.yaml` | Polynomial signature kernels; `N=200,400,800`, `d=2,4,8,16` | 32 x 32 | 10 |
 | `config/combined_sweep.yaml` | All finite-difference-compatible operations on the kernel-safe grid | 32 | 10 |
@@ -143,13 +161,16 @@ Important comparison notes:
 - `signature-rs` and `chen-signatures` use explicit Python batch
   loops because their public APIs are single-path. Their timings include that
   loop overhead.
+- The direct-BCH log-signature sweep compares `pysiglib` method 3, iisignature's compiled `C` method, `signature-rs`, and log-signatures-pytorch's `bch_sparse` method. `iisignature` and `signature-rs` contribute forward results only because they do not expose BCH backpropagation.
 - JAX kernels compile during warmup and synchronize every measured call.
-  `log-signatures-pytorch` uses eager CPU execution and compiled GPU execution.
+- `log-signatures-pytorch` uses eager CPU execution and compiled GPU execution.
 - Finite-difference kernel comparisons use `float64` on CPU and `float32` on
   GPU. Polynomial kernel comparisons use `float32` on both backends.
 - `pathsig` and `signatory` report compact Lyndon-basis log-signatures.
   `tensordev` reports an expanded word-basis tensor logarithm, so its
   log-signature output size differs.
+
+Signature-kernel heatmaps report `signaturekernel_fwd_bwd`: each repetition computes a fresh Gram matrix and its gradient with respect to the first path batch using a fixed seeded random cotangent. Both phases are timed together, including any derivative preparation performed by the library during forward. Inputs and cotangents are prepared outside timing; no forward grids, gradients or pullbacks are reused between repetitions. JAX receives paths and cotangents as dynamic arguments and returns both the value and gradient. These results must not be mixed with the historical separate forward/backward measurements.
 
 The lockfiles pin the environments. `pysiglib` and its CUDA plugin build from
 the sibling `../pySigLib` source checkout. `signature-py` builds from pinned Rust

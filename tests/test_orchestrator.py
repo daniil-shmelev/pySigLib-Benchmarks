@@ -15,6 +15,13 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import orchestrator
 
 
+def test_task_timeout_does_not_change_resume_identity():
+    config = {"N": 1000, "d": 16, "m": 3, "operation": "logsignature"}
+    assert orchestrator.make_task_id("example", "gpu", config) == orchestrator.make_task_id(
+        "example", "gpu", {**config, "task_timeout_seconds": 120},
+    )
+
+
 def test_run_metadata_captures_hardware_and_dirty_patch(tmp_path, monkeypatch):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -95,8 +102,45 @@ def test_python_adapter_expands_cpu_count_in_environment(tmp_path, monkeypatch):
     assert env["OMP_NUM_THREADS"] == "12"
 
 
+def test_rust_adapter_uses_cached_toolchain(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    for key in ("CARGO_HOME", "RUSTUP_HOME"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    cargo_dir = tmp_path / ".cache" / "puccinialin" / "cargo"
+    monkeypatch.setattr(
+        orchestrator.shutil, "which",
+        lambda command, *, path: str(cargo_dir / "bin" / command)
+        if path == str(cargo_dir / "bin") else None,
+    )
+
+    _, _, env = orchestrator.prepare_python_adapter_process(
+        "signature-rs", {"script": "adapter.py"}, None,
+    )
+
+    assert env["PATH"] == str(cargo_dir / "bin") + orchestrator.os.pathsep + "/usr/bin"
+    assert env["CARGO_HOME"] == str(cargo_dir)
+    assert env["RUSTUP_HOME"] == str(cargo_dir.parent / "rustup")
+
+
+def test_rust_discovery_preserves_toolchain_already_on_path(monkeypatch):
+    env = {"PATH": "/custom/bin", "CARGO_HOME": "/custom/cargo", "RUSTUP_HOME": "/custom/rustup"}
+    original = env.copy()
+    monkeypatch.setattr(orchestrator.shutil, "which", lambda *args, **kwargs: "/custom/bin/cargo")
+    orchestrator.discover_rust_toolchain(env)
+    assert env == original
+
+
+def test_rust_discovery_without_installation_leaves_environment_unchanged(monkeypatch):
+    env = {"PATH": "/usr/bin"}
+    monkeypatch.setattr(orchestrator.shutil, "which", lambda *args, **kwargs: None)
+    orchestrator.discover_rust_toolchain(env)
+    assert env == {"PATH": "/usr/bin"}
+
+
 def test_build_task_config_applies_only_matching_backend_config():
     sweep = {
+        "task_timeout_seconds": 120,
         "library_configs": {
             "example": {
                 "shared": "value",
@@ -131,6 +175,7 @@ def test_build_task_config_applies_only_matching_backend_config():
     )
 
     assert cpu["shared"] == "value"
+    assert cpu["task_timeout_seconds"] == 120
     assert cpu["n_jobs"] == -1
     assert "backend_configs" not in cpu
     assert gpu["shared"] == "value"
@@ -260,6 +305,35 @@ def test_worker_times_out_an_active_kernel_call(monkeypatch):
         worker._read_response()
 
     assert killed == [True]
+
+
+@pytest.mark.parametrize("events", [[], ["call_start", "call_end"], ["diagnostic"]])
+def test_task_timeout_includes_setup_and_is_not_reset_by_events(monkeypatch, events):
+    worker = orchestrator.PythonAdapterWorker("example", {})
+    worker.process = object()
+    worker._output_queue = orchestrator.queue.Queue()
+    for status in events:
+        worker._output_queue.put(
+            orchestrator.PYTHON_WORKER_PROTOCOL_PREFIX + json.dumps({"status": status})
+            if status != "diagnostic" else "compiling..."
+        )
+    killed = []
+    monkeypatch.setattr(worker, "_kill_process_tree", lambda: killed.append(True))
+    with pytest.raises(orchestrator.BenchmarkTaskTimeout, match="including setup and compilation"):
+        worker._read_response(task_timeout_seconds=0.01)
+    assert killed == [True]
+
+
+def test_killing_systemd_worker_targets_service_not_only_launcher(monkeypatch):
+    worker = orchestrator.PythonAdapterWorker("example", {})
+    worker.process = type("Process", (), {"pid": 123, "wait": lambda *args, **kwargs: 0})()
+    worker._systemd_unit = "sig-benchmark-test.service"
+    commands = []
+    monkeypatch.setattr(orchestrator.subprocess, "run", lambda command, **kwargs: commands.append(command))
+    monkeypatch.setattr(orchestrator.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(orchestrator.os, "killpg", lambda *args: None)
+    worker._kill_process_tree()
+    assert commands == [["systemctl", "--user", "kill", "--kill-whom=all", "--signal=SIGKILL", worker._systemd_unit]]
 
 
 def test_worker_memory_limit_kills_only_worker_and_reports_oom(monkeypatch):
@@ -402,9 +476,38 @@ def test_python_worker_does_not_classify_random_adapter_error_as_oom(
         worker.run({"memory_sample_interval_seconds": 0.005})
 
 
-def test_cgroup_worker_forwards_changed_environment(monkeypatch):
+def test_worker_does_not_repeat_failed_startup(monkeypatch):
+    worker = orchestrator.PythonAdapterWorker("example", {})
+    starts = []
+
+    def fail_start():
+        starts.append(True)
+        raise RuntimeError("No CMAKE_CUDA_COMPILER could be found")
+
+    monkeypatch.setattr(worker, "_start", fail_start)
+    for _ in range(2):
+        with pytest.raises(orchestrator.BenchmarkWorkerStartupError, match="CMAKE_CUDA_COMPILER"):
+            worker.run({})
+        worker.close()
+    assert len(starts) == 1
+
+
+def test_cgroup_worker_forwards_changed_and_inherited_environment(monkeypatch):
     captured = {}
     script_path = Path("adapter.py")
+    inherited = {
+        "PATH": "/usr/local/cuda/bin:/usr/bin",
+        "CUDACXX": "/usr/local/cuda/bin/nvcc",
+        "CUDA_HOME": "/usr/local/cuda",
+        "LD_LIBRARY_PATH": "/usr/local/cuda/lib64",
+        "CUDA_VISIBLE_DEVICES": "0",
+        "NVCC_APPEND_FLAGS": "--std=c++20",
+        "CARGO_HOME": "/home/test/.cache/puccinialin/cargo",
+        "RUSTUP_HOME": "/home/test/.cache/puccinialin/rustup",
+        "RUSTUP_TOOLCHAIN": "stable",
+    }
+    for key, value in inherited.items():
+        monkeypatch.setenv(key, value)
     monkeypatch.setenv(
         "UV_PROJECT_ENVIRONMENT",
         "/home/test/benchmark-venv",
@@ -426,7 +529,7 @@ def test_cgroup_worker_forwards_changed_environment(monkeypatch):
             script_path,
             ["uv", "run"],
             {
-                "PATH": "/usr/bin",
+                **inherited,
                 "PYTHONPATH": "/tmp/adapter-package",
                 "UV": "/opt/uv/bin/uv",
                 "UV_PROJECT_ENVIRONMENT": "/home/test/benchmark-venv",
@@ -451,6 +554,8 @@ def test_cgroup_worker_forwards_changed_environment(monkeypatch):
     worker._start()
 
     assert "--setenv=PYTHONPATH=/tmp/adapter-package" in captured["command"]
+    for key, value in inherited.items():
+        assert f"--setenv={key}={value}" in captured["command"]
     assert (
         "--setenv=UV_PROJECT_ENVIRONMENT=/home/test/benchmark-venv"
         in captured["command"]
@@ -622,10 +727,13 @@ def test_orchestrator_passes_one_worker_to_all_backend_tasks(tmp_path, monkeypat
         return _result(task_config)
 
     monkeypatch.setattr(orchestrator, "run_python_adapter", fake_adapter)
-    orchestrator.run_orchestrator(sweep_path, registry_path=registry_path)
+    output_dir = tmp_path / "group" / "data" / "signatures"
+    result = orchestrator.run_orchestrator(sweep_path, registry_path=registry_path, output_dir=output_dir)
 
     assert len(workers) == 2
     assert workers[0] is workers[1]
+    assert result == output_dir / "results.csv"
+    assert result.is_file()
 
 
 def test_orchestrator_uses_fixed_path_length_per_block(tmp_path, monkeypatch):
@@ -996,8 +1104,60 @@ def test_failed_task_is_recorded_and_not_retried(tmp_path, monkeypatch):
     assert resumed_calls == []
     assert [int(row["N"]) for row in final_rows] == [4, 16]
 
+    # Retry only recorded failures even if the saved grid has an unrun case.
+    saved_sweep = run_dir / "benchmark_sweep.yaml"
+    saved_sweep.write_text(saved_sweep.read_text().replace("Ns: [4, 8, 16]", "Ns: [4, 8, 16, 32]"))
+    orchestrator.run_orchestrator(resume_dir=run_dir, retry_failed=True)
+    with csv_path.open(newline="", encoding="utf-8") as results_file:
+        final_rows = list(csv.DictReader(results_file))
+    assert resumed_calls == [8]
+    assert [int(row["N"]) for row in final_rows] == [4, 16, 8]
+    with (run_dir / orchestrator.FAILED_TASKS_FILE).open(newline="", encoding="utf-8") as file:
+        assert list(csv.DictReader(file)) == []
+    backup_dir, = run_dir.glob("before-retry-*")
+    with (backup_dir / orchestrator.FAILED_TASKS_FILE).open(newline="", encoding="utf-8") as file:
+        assert [int(row["N"]) for row in csv.DictReader(file)] == [8]
+    assert len((backup_dir / orchestrator.COMPLETED_TASKS_FILE).read_text().splitlines()) == 3
+    orchestrator.run_orchestrator(resume_dir=run_dir, retry_failed=True)
+    assert resumed_calls == [8]
 
-def test_unsupported_task_is_recorded_and_not_retried(tmp_path, monkeypatch):
+
+def test_retry_exclusion_preserves_failures_and_successes(tmp_path):
+    success_id, retry_id, excluded_id = (character * 64 for character in "abc")
+    orchestrator.initialize_results_csv(tmp_path / "results.csv")
+    with (tmp_path / "results.csv").open("a", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=orchestrator.RESULT_FIELDS)
+        writer.writerow({"task_id": success_id})
+    failed_path = tmp_path / orchestrator.FAILED_TASKS_FILE
+    orchestrator.initialize_failed_tasks_csv(failed_path)
+    with failed_path.open("a", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=orchestrator.FAILED_TASK_FIELDS)
+        writer.writerows([
+            {"task_id": success_id, "library": "working"},
+            {"task_id": retry_id, "library": "retry"},
+            {"task_id": excluded_id, "library": "log-signatures-pytorch", "reason": "original failure"},
+        ])
+    completed_path = tmp_path / orchestrator.COMPLETED_TASKS_FILE
+    completed_path.write_text("\n".join([success_id, retry_id, excluded_id]) + "\n")
+    original_failures = failed_path.read_bytes()
+    original_results = (tmp_path / "results.csv").read_bytes()
+
+    assert orchestrator.reopen_failed_tasks(tmp_path, ["log-signatures-pytorch"]) == {retry_id}
+
+    assert orchestrator.load_completed_tasks(completed_path) == {success_id, excluded_id}
+    with failed_path.open(newline="") as file:
+        remaining = list(csv.DictReader(file))
+    assert [row["task_id"] for row in remaining] == [excluded_id]
+    assert remaining[0]["reason"] == "original failure"
+    assert (tmp_path / "results.csv").read_bytes() == original_results
+    backup, = tmp_path.glob("before-retry-*")
+    assert (backup / orchestrator.FAILED_TASKS_FILE).read_bytes() == original_failures
+    orchestrator.reopen_failed_tasks(tmp_path, ["log-signatures-pytorch"])
+    assert list(tmp_path.glob("before-retry-*")) == [backup]
+
+
+@pytest.mark.parametrize("reason", orchestrator.UNSUPPORTED_ERROR_MARKERS)
+def test_unsupported_task_is_recorded_and_not_retried(tmp_path, monkeypatch, reason):
     sweep_path = tmp_path / "sweep.yaml"
     sweep_path.write_text(
         "\n".join([
@@ -1035,7 +1195,7 @@ def test_unsupported_task_is_recorded_and_not_retried(tmp_path, monkeypatch):
             raise subprocess.CalledProcessError(
                 1,
                 ["limited-adapter"],
-                stderr=orchestrator.UNSUPPORTED_ERROR_MARKERS[0],
+                stderr=reason,
             )
         return _result(task_config)
 
@@ -1053,7 +1213,9 @@ def test_unsupported_task_is_recorded_and_not_retried(tmp_path, monkeypatch):
     assert calls == [4, 8]
     assert [int(row["N"]) for row in result_rows] == [8]
     assert [int(row["N"]) for row in skipped_rows] == [4]
-    assert skipped_rows[0]["reason"] == orchestrator.UNSUPPORTED_ERROR_MARKERS[0]
+    assert skipped_rows[0]["reason"] == reason
+    with (run_dir / orchestrator.FAILED_TASKS_FILE).open(newline="", encoding="utf-8") as file:
+        assert list(csv.DictReader(file)) == []
     assert len((run_dir / orchestrator.COMPLETED_TASKS_FILE).read_text().splitlines()) == 2
 
     resumed_calls = []

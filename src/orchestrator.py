@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -90,6 +91,7 @@ ADAPTIVE_BLOCK_FIELDS = [
 ]
 UNSUPPORTED_ERROR_MARKERS = (
     "CUDA branched sig: num_trees > 1024 not supported",
+    "iisignature BCH logsignature backprop is unsupported",
 )
 OOM_ERROR_TYPES = {
     "benchmarkworkeroom",
@@ -115,8 +117,16 @@ class BenchmarkCallTimeout(TimeoutError):
     """A benchmark kernel call exceeded its configured deadline."""
 
 
+class BenchmarkTaskTimeout(TimeoutError):
+    """A benchmark case exceeded its deadline, including setup and compilation."""
+
+
 class BenchmarkWorkerOOM(MemoryError):
     """A benchmark worker exceeded its memory limit."""
+
+
+class BenchmarkWorkerStartupError(RuntimeError):
+    """A library/backend could not start; further tasks reuse this failure."""
 
 
 def is_oom_failure(error_type: str, reason: str) -> bool:
@@ -156,7 +166,7 @@ def make_task_id(
     identity_config = {
         key: value
         for key, value in task_config.items()
-        if key != "worker_memory_limit_gb"
+        if key not in {"worker_memory_limit_gb", "task_timeout_seconds"}
     }
     payload = {
         "library": library_name,
@@ -189,6 +199,37 @@ def initialize_results_csv(csv_path: Path) -> None:
         writer.writeheader()
         results_file.flush()
         os.fsync(results_file.fileno())
+
+
+def reopen_failed_tasks(run_dir: Path, exclude_libraries: Sequence[str] = ()) -> set[str]:
+    """Back up failure records and clear their completion markers for retry."""
+    failed_path = run_dir / FAILED_TASKS_FILE
+    if not failed_path.exists():
+        return set()
+    with failed_path.open(newline="", encoding="utf-8") as file:
+        failed_rows = list(csv.DictReader(file))
+    excluded_ids = {row["task_id"] for row in failed_rows if row["library"] in exclude_libraries}
+    failed_ids = {row["task_id"] for row in failed_rows} - excluded_ids
+    if not failed_ids:
+        return set()
+    # A successful result takes precedence over any stale failure record.
+    with (run_dir / "results.csv").open(newline="", encoding="utf-8") as file:
+        failed_ids.difference_update(row["task_id"] for row in csv.DictReader(file))
+    completed_path = run_dir / COMPLETED_TASKS_FILE
+    backup_dir = Path(tempfile.mkdtemp(prefix="before-retry-", dir=run_dir))
+    shutil.copy2(failed_path, backup_dir / failed_path.name)
+    if completed_path.exists():
+        shutil.copy2(completed_path, backup_dir / completed_path.name)
+    remaining = load_completed_tasks(completed_path) - failed_ids
+    temp_path = completed_path.with_suffix(".tmp")
+    with temp_path.open("w", encoding="utf-8") as file:
+        file.writelines(task_id + "\n" for task_id in sorted(remaining))
+        file.flush()
+        os.fsync(file.fileno())
+    os.replace(temp_path, completed_path)
+    discard_uncommitted_rows(failed_path, excluded_ids, FAILED_TASK_FIELDS)
+    print(f"Retrying {len(failed_ids)} failed tasks; prior records: {backup_dir}")
+    return failed_ids
 
 
 def initialize_skipped_tasks_csv(csv_path: Path) -> None:
@@ -580,6 +621,18 @@ def backend_variants(library_config: Dict[str, Any]) -> List[Dict[str, Any]]:
     return normalized
 
 
+def discover_rust_toolchain(env: Dict[str, str]) -> None:
+    """Use Cargo from PATH, falling back to puccinialin's cached install."""
+    if shutil.which("cargo", path=env.get("PATH", "")):
+        return
+    cached_rust = Path.home() / ".cache" / "puccinialin"
+    bin_dir = str(cached_rust / "cargo" / "bin")
+    if shutil.which("cargo", path=bin_dir):
+        env["PATH"] = os.pathsep.join(filter(None, [bin_dir, env.get("PATH", "")]))
+        env.setdefault("CARGO_HOME", str(cached_rust / "cargo"))
+        env.setdefault("RUSTUP_HOME", str(cached_rust / "rustup"))
+
+
 def prepare_python_adapter_process(
     library_name: str,
     library_config: Dict[str, Any],
@@ -598,6 +651,9 @@ def prepare_python_adapter_process(
             .replace("{cpu_count}", str(os.cpu_count() or 1))
             for key, value in env_overrides.items()
         })
+
+    if library_name == "signature-rs":
+        discover_rust_toolchain(env)
 
     compatibility_path = ensure_compatibility_wheel(
         library_name,
@@ -652,6 +708,7 @@ class PythonAdapterWorker:
         self.env_overrides = env_overrides
         self.process = None
         self.diagnostics: List[str] = []
+        self._startup_error = None
         self.scope = library_config.get("worker_scope")
         self.scope_key = None
         self._output_queue = None
@@ -662,6 +719,7 @@ class PythonAdapterWorker:
         self._memory_call_active = False
         self._memory_metrics: Dict[str, Any] = {}
         self._cgroup_memory_current_path: Optional[Path] = None
+        self._systemd_unit = None
 
     def __enter__(self):
         return self
@@ -669,18 +727,33 @@ class PythonAdapterWorker:
     def __exit__(self, exc_type, exc_value, traceback_value):
         self.close()
 
-    def _read_response(self) -> Dict[str, Any]:
+    def _read_response(self, *, task_timeout_seconds=None) -> Dict[str, Any]:
         if self.process is None or self._output_queue is None:
             raise RuntimeError(f"{self.library_name}: worker is not running")
 
         deadline = None
         active_call = None
+        task_deadline = (
+            time.monotonic() + task_timeout_seconds
+            if task_timeout_seconds is not None else None
+        )
         while True:
             timeout = None
+            if task_deadline is not None:
+                timeout = task_deadline - time.monotonic()
+                if timeout <= 0:
+                    self._kill_process_tree()
+                    raise BenchmarkTaskTimeout(
+                        f"{self.library_name}: task exceeded {task_timeout_seconds:g} seconds "
+                        "(including setup and compilation)"
+                    )
             if self._memory_limit_bytes is not None:
-                timeout = 0.1
+                timeout = min(timeout, 0.1) if timeout is not None else 0.1
             if self._memory_call_active:
-                timeout = self._memory_sample_interval_seconds
+                timeout = (
+                    min(timeout, self._memory_sample_interval_seconds)
+                    if timeout is not None else self._memory_sample_interval_seconds
+                )
             if deadline is not None:
                 remaining = max(0.0, deadline - time.monotonic())
                 timeout = remaining if timeout is None else min(timeout, remaining)
@@ -910,6 +983,13 @@ class PythonAdapterWorker:
     def _kill_process_tree(self) -> None:
         if self.process is None:
             return
+        # A systemd service is not a child of the systemd-run client.
+        if self._systemd_unit is not None:
+            subprocess.run(
+                ["systemctl", "--user", "kill", "--kill-whom=all",
+                 "--signal=SIGKILL", self._systemd_unit],
+                capture_output=True, timeout=5, check=False,
+            )
         process = self.process
         if os.name == "posix":
             try:
@@ -953,17 +1033,29 @@ class PythonAdapterWorker:
                 systemd_run is not None
                 and systemd_user_manager_available(env)
             ):
-                changed_environment = [
+                # User services inherit the manager's environment, not this
+                # shell's: explicitly forward inherited compiler/runtime paths.
+                worker_environment = [
                     f"--setenv={key}={value}"
                     for key, value in sorted(env.items())
                     if (
                         os.environ.get(key) != value
-                        or key == "UV_PROJECT_ENVIRONMENT"
+                        or key in {
+                            "PATH", "LD_LIBRARY_PATH", "PYTHONPATH",
+                            "CUDACXX", "CUDA_HOME", "CUDA_PATH",
+                            "NVCC_APPEND_FLAGS",
+                            "CUDA_VISIBLE_DEVICES", "CUDA_DEVICE_ORDER",
+                            "CC", "CXX", "CMAKE_ARGS", "CMAKE_PREFIX_PATH",
+                            "UV_PROJECT_ENVIRONMENT",
+                            "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN",
+                        }
                     )
                 ]
+                self._systemd_unit = f"sig-benchmark-{uuid.uuid4().hex}.service"
                 command = [
                     systemd_run,
                     "--user",
+                    f"--unit={self._systemd_unit}",
                     "--pipe",
                     "--wait",
                     "--collect",
@@ -972,7 +1064,7 @@ class PythonAdapterWorker:
                     f"MemoryMax={self._memory_limit_bytes}",
                     "-p",
                     "MemorySwapMax=0",
-                    *changed_environment,
+                    *worker_environment,
                     "--",
                     *command,
                 ]
@@ -1034,6 +1126,15 @@ class PythonAdapterWorker:
         )
 
     def run(self, task_config: Dict[str, Any]) -> Any:
+        task_timeout = task_config.get("task_timeout_seconds")
+        if task_timeout is not None:
+            task_timeout = float(task_timeout)
+            if not math.isfinite(task_timeout) or task_timeout <= 0:
+                raise ValueError("task_timeout_seconds must be finite and > 0")
+        if self._startup_error is not None:
+            raise BenchmarkWorkerStartupError(
+                f"{self.library_name}: startup previously failed: {self._startup_error}"
+            )
         memory_limit_gb = task_config.get("worker_memory_limit_gb")
         memory_limit_bytes = (
             None
@@ -1054,14 +1155,22 @@ class PythonAdapterWorker:
             raise ValueError("memory_sample_interval_seconds must be > 0")
         self._memory_call_active = False
         self._memory_metrics = {}
-        self._start()
+        try:
+            self._start()
+        except Exception as error:
+            self._startup_error = str(error)
+            self.close()
+            raise BenchmarkWorkerStartupError(str(error)) from error
         if self.scope_key is None:
             self.scope_key = self._task_scope_key(task_config)
         if self.process is None or self.process.stdin is None:
             raise RuntimeError(f"{self.library_name}: worker is not running")
         self.process.stdin.write(json.dumps(task_config) + "\n")
         self.process.stdin.flush()
-        response = self._read_response()
+        response = (
+            self._read_response(task_timeout_seconds=task_timeout)
+            if task_timeout is not None else self._read_response()
+        )
         status = response.get("status")
         if status == "result":
             return response.get("result")
@@ -1104,6 +1213,7 @@ class PythonAdapterWorker:
         self._memory_limit_bytes = None
         self._memory_call_active = False
         self._cgroup_memory_current_path = None
+        self._systemd_unit = None
 
 
 def run_python_adapter(
@@ -1276,6 +1386,7 @@ def build_task_config(
         "warmup_iterations",
         "timing_statistic",
         "call_timeout_seconds",
+        "task_timeout_seconds",
         "worker_memory_limit_gb",
         "clear_input_caches_after_task",
     ):
@@ -1840,6 +1951,9 @@ def run_orchestrator(
     config_path: Optional[Path] = None,
     resume_dir: Optional[Path] = None,
     registry_path: Optional[Path] = None,
+    retry_failed: bool = False,
+    output_dir: Optional[Path] = None,
+    retry_exclude_libraries: Sequence[str] = (),
 ):
     """
     Main orchestrator logic
@@ -1848,8 +1962,17 @@ def run_orchestrator(
         config_path: Optional sweep config (default: config/benchmark_sweep.yaml)
         resume_dir: Existing run directory to continue
         registry_path: Optional library registry (default: config/libraries_registry.yaml)
+        retry_failed: Reopen failed fixed-grid tasks when resuming, keeping successes.
+        output_dir: Explicit directory for a new sweep inside a benchmark group.
+        retry_exclude_libraries: Libraries whose failures should remain closed.
     """
     started_at = time.monotonic()
+    if output_dir is not None and resume_dir is not None:
+        raise ValueError("output_dir and resume_dir cannot be used together")
+    if retry_failed and resume_dir is None:
+        raise ValueError("--retry-failed requires --resume")
+    if retry_exclude_libraries and not retry_failed:
+        raise ValueError("--retry-exclude-library requires --retry-failed")
     if config_path is not None and resume_dir is not None:
         raise ValueError("config_path and resume_dir cannot be used together")
     if registry_path is not None and resume_dir is not None:
@@ -1913,16 +2036,27 @@ def run_orchestrator(
     if batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
     adaptive_min_time_ms = sweep.get("adaptive_min_time_ms")
+    if retry_failed and adaptive_min_time_ms is not None:
+        raise ValueError("--retry-failed currently supports fixed-grid sweeps only")
     call_timeout_seconds = sweep.get("call_timeout_seconds")
     if call_timeout_seconds is not None and float(call_timeout_seconds) <= 0:
         raise ValueError("call_timeout_seconds must be > 0")
+    task_timeout_seconds = sweep.get("task_timeout_seconds")
+    if task_timeout_seconds is not None and (
+        not math.isfinite(float(task_timeout_seconds)) or float(task_timeout_seconds) <= 0
+    ):
+        raise ValueError("task_timeout_seconds must be finite and > 0")
     worker_memory_limit_gb = sweep.get("worker_memory_limit_gb")
     if worker_memory_limit_gb is not None and float(worker_memory_limit_gb) <= 0:
         raise ValueError("worker_memory_limit_gb must be > 0")
     runs_dir = REPO_ROOT / sweep.get("runs_dir", "runs")
 
     if resume_dir is None:
-        run_dir = setup_run_folder(runs_dir)
+        if output_dir is None:
+            run_dir = setup_run_folder(runs_dir)
+        else:
+            run_dir = output_dir.resolve()
+            run_dir.mkdir(parents=True, exist_ok=False)
         (run_dir / "benchmark_sweep.yaml").write_text(
             sweep_config.read_text(encoding="utf-8"),
             encoding="utf-8"
@@ -1949,6 +2083,8 @@ def run_orchestrator(
     else:
         if not csv_path.exists():
             raise FileNotFoundError(f"Results file not found: {csv_path}")
+        if retry_failed:
+            retry_task_ids = reopen_failed_tasks(run_dir, retry_exclude_libraries)
         completed_tasks = load_completed_tasks(completed_path)
         discard_uncommitted_rows(csv_path, completed_tasks)
         if skipped_path.exists():
@@ -1991,6 +2127,8 @@ def run_orchestrator(
         print(f"Adaptive minimum time: {float(adaptive_min_time_ms):g} ms")
     if call_timeout_seconds is not None:
         print(f"Call timeout: {float(call_timeout_seconds):g} seconds")
+    if task_timeout_seconds is not None:
+        print(f"Task timeout (including setup): {float(task_timeout_seconds):g} seconds")
     if worker_memory_limit_gb is not None:
         print(f"Worker memory limit: {float(worker_memory_limit_gb):g} GiB")
     print(f"Seed: {seed}")
@@ -2100,6 +2238,7 @@ def run_orchestrator(
 
             for backend in backends:
                 backend_name = backend.get("name", "")
+                startup_failure_reported = False
                 python_worker = (
                     PythonAdapterWorker(
                         library_name,
@@ -2160,6 +2299,11 @@ def run_orchestrator(
                                     )
                                 if task_id in completed_tasks:
                                     progress.set_postfix_str("skipped: complete", refresh=True)
+                                    progress.update(1)
+                                    continue
+
+                                if retry_failed and task_id not in retry_task_ids:
+                                    progress.set_postfix_str("skipped: not selected for retry", refresh=True)
                                     progress.update(1)
                                     continue
 
@@ -2240,10 +2384,16 @@ def run_orchestrator(
                                         e,
                                     )
                                     completed_tasks.add(task_id)
-                                    _progress_write(
-                                        f"Failed {task_label}: {e}",
-                                        file=sys.stderr,
-                                    )
+                                    if not (
+                                        isinstance(e, BenchmarkWorkerStartupError)
+                                        and startup_failure_reported
+                                    ):
+                                        _progress_write(
+                                            f"Failed {task_label}: {e}",
+                                            file=sys.stderr,
+                                        )
+                                    if isinstance(e, BenchmarkWorkerStartupError):
+                                        startup_failure_reported = True
                                     if python_worker is not None:
                                         python_worker.close()
                                     continue
@@ -2308,9 +2458,20 @@ Examples:
         help="Path to a library registry (default: config/libraries_registry.yaml)",
     )
 
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="With --resume, retry failed fixed-grid tasks while keeping successes",
+    )
+    parser.add_argument(
+        "--retry-exclude-library", action="append", default=[],
+        help="Keep failures for this library without retrying (repeatable)",
+    )
     args = parser.parse_args()
     run_orchestrator(
         config_path=args.config,
         resume_dir=args.resume,
         registry_path=args.registry,
+        retry_failed=args.retry_failed,
+        retry_exclude_libraries=args.retry_exclude_library,
     )

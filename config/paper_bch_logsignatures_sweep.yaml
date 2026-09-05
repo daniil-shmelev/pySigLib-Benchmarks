@@ -1,13 +1,10 @@
-# Forward and backward log-signature sweep for the pySigLib paper.
+# Direct BCH log-signature sweep for the pySigLib paper.
 
 libraries:
     - iisignature
+    - signature-rs
     - log-signatures-pytorch
-    - signatory
-    - pathsig
     - pysiglib
-    - signax
-    - chen-signatures
 
 path_kind: "brownian"
 seed: 20260529
@@ -29,16 +26,17 @@ repeats: 10
 warmup_iterations: 1
 timing_statistic: "min"
 worker_memory_limit_gb: 16
+task_timeout_seconds: 120
 clear_input_caches_after_task: true
 
 library_configs:
     iisignature:
-        logsig_method: "S"
+        logsig_method: "C"
     log-signatures-pytorch:
-        log_signature_method: "default"
-        log_signature_mode: "words"
+        log_signature_method: "bch_sparse"
+        log_signature_mode: "hall"
     pysiglib:
-        log_sig_method: 2
+        log_sig_method: 3
         backend_configs:
             cpu:
                 n_jobs: -1

@@ -544,6 +544,35 @@ class PySigLibAdapter(BenchmarkAdapter):
 
         return backprop_fn
 
+    def run_signaturekernel_fwd_bwd(self, path1, path2, d, m) -> Callable:
+        """Time a fresh forward grid/value and its VJP together on every call."""
+        X, Y = self._path_array(path1), self._path_array(path2)
+        method, parameters = self._signature_kernel_parameters(m)
+        max_batch = int(self.config.get("sig_kernel_max_batch", -1))
+        shape = tuple(X.shape[:-2]) + tuple(Y.shape[:-2])
+        template = (
+            np.empty(shape, dtype=X.dtype) if isinstance(X, np.ndarray)
+            else self.torch.empty(shape, dtype=X.dtype, device=X.device)
+        )
+        cotangent = self._cotangent(template)
+
+        def kernel():
+            forward = self.pysiglib.sig_kernel_gram(
+                X, Y, **parameters, static_kernel=None, time_aug=False,
+                n_jobs=self.n_jobs, return_grid=method == "finite_difference",
+                max_batch=max_batch,
+            )
+            grid = forward if method == "finite_difference" else None
+            output = forward[..., -1, -1] if grid is not None else forward
+            gradient, _ = self.pysiglib.sig_kernel_gram_backprop(
+                cotangent, X, Y, **parameters, static_kernel=None, time_aug=False,
+                left_deriv=True, right_deriv=False, k_grid=grid,
+                n_jobs=self.n_jobs, return_grid=False, max_batch=max_batch,
+            )
+            return self._synchronize((output, gradient))
+
+        return kernel
+
     def _run_benchmark(self) -> Optional[Dict[str, Any]]:
         """Execute the benchmark"""
         # Generate path input during setup. pySigLib accepts leading batch
@@ -626,6 +655,9 @@ class PySigLibAdapter(BenchmarkAdapter):
                     self.m,
                 )
             )
+        elif self.operation == "signaturekernel_fwd_bwd":
+            kernel = self.run_signaturekernel_fwd_bwd(path, self.make_path_input(), self.d, self.m)
+            method = self._signature_kernel_method_label("forward+backward(sig_kernel_gram)", self.m)
         elif self.operation == "signaturekernel_backprop":
             path2 = self.make_path_input()
             kernel = self.run_signaturekernel_backprop(

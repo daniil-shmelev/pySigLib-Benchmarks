@@ -1,6 +1,7 @@
 """Tests for signature-kernel adapter paths."""
 
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +16,65 @@ from adapters.python.run_pysiglib import PySigLibAdapter
 from adapters.python.run_sigkerax import SigkeraxAdapter
 from adapters.python.run_sigkernel import SigkernelAdapter
 from common.paths import make_path
+
+
+@pytest.mark.parametrize("method", ["finite_difference", "polynomial"])
+def test_pysiglib_fwd_bwd_recomputes_forward_inside_every_call(method):
+    adapter = PySigLibAdapter.__new__(PySigLibAdapter)
+    adapter.config = {"sig_kernel_method": method}
+    adapter.n_jobs = 1
+    adapter.backend = "cpu"
+    adapter._path_array = lambda x: x
+    adapter._cotangent = lambda out: np.ones(out.shape, dtype=out.dtype)
+    calls = []
+
+    def forward(X, Y, **kwargs):
+        calls.append("forward")
+        return np.full((2, 2, 4, 4) if kwargs["return_grid"] else (2, 2), len(calls), dtype=np.float32)
+
+    def backward(cotangent, X, Y, **kwargs):
+        assert calls[-1] == "forward"
+        grid = kwargs["k_grid"]
+        if method == "finite_difference":
+            assert np.all(grid == len(calls))
+        else:
+            assert grid is None
+        calls.append("backward")
+        return np.ones_like(X), None
+
+    adapter.pysiglib = types.SimpleNamespace(sig_kernel_gram=forward, sig_kernel_gram_backprop=backward)
+    path = np.ones((2, 4, 2), dtype=np.float32)
+    kernel = adapter.run_signaturekernel_fwd_bwd(path, path, 2, 2)
+    assert calls == []
+    first, _ = kernel()
+    second, _ = kernel()
+    assert calls == ["forward", "backward", "forward", "backward"]
+    assert not np.array_equal(first, second)
+
+
+@pytest.mark.parametrize("library,adapter_class", [
+    ("pysiglib", PySigLibAdapter), ("sigkernel", SigkernelAdapter),
+    ("sigkerax", SigkeraxAdapter), ("polysigkernel", PolySigKernelAdapter),
+])
+def test_fwd_bwd_matches_separate_values_and_gradients(library, adapter_class):
+    pytest.importorskip(library)
+    config = _config("signaturekernel_fwd_bwd")
+    config["sig_kernel_dyadic_order"] = 0
+    adapter = adapter_class(config)
+    X, Y = _path_batch(), _path_batch() + 0.2
+    kernel = adapter.run_signaturekernel_fwd_bwd(X, Y, 2, 2)
+    value, gradient = kernel()
+    value2, gradient2 = kernel()
+    expected_value = adapter.run_signaturekernel(X, Y, 2, 2)()
+    expected_gradient = adapter.run_signaturekernel_backprop(X, Y, 2, 2)()
+    if hasattr(gradient, "detach"):
+        gradient, gradient2 = gradient.detach(), gradient2.detach()
+    if hasattr(value, "detach"):
+        value, value2 = value.detach(), value2.detach()
+    np.testing.assert_allclose(value, expected_value, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(gradient, expected_gradient, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(value2, value, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(gradient2, gradient, rtol=1e-4, atol=1e-5)
 
 
 def _config(operation: str) -> dict:
